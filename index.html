@@ -2900,7 +2900,8 @@ function frame(dt) {
     // presents from the sky
     if ((G.crateT -= dt) <= 0) {
       G.crateT = rand(2.2, 4);
-      if (items.filter(i => i.kind === 'crate').length < 2) spawnItem('crate', rand(bed.x1 + 40, bed.x2 - 40), -40, 0, 100, null);
+      // mostly mystery crates, sometimes a crate with a random weird weapon in it
+      if (items.filter(i => i.kind === 'crate' || i.kind === 'wcrate').length < 2) spawnItem(Math.random() < .35 ? 'wcrate' : 'crate', rand(bed.x1 + 40, bed.x2 - 40), -40, 0, 100, null);
     }
     if (G.phaseT >= PLAY_LEN) beginWave();
   }
