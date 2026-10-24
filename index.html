@@ -517,6 +517,8 @@ const settings = { names: ['Red', 'Blue'], mode: '2p', game: 'party', mini: 'ran
 try { Object.assign(settings, JSON.parse(localStorage.getItem('tb3-settings') || '{}')); } catch (e) {}
 // new defaults: rounds are "you tell me" and everything else shuffles
 if (!settings.v4) Object.assign(settings, { v4: true, rounds: 0, pileRounds: 0, target: 0, skin: 'random', items: 'random', mini: 'random', level: 'random' });
+// More stuff always starts closed: every visit begins with the one big button
+settings.more = false;
 function saveSettings() { try { localStorage.setItem('tb3-settings', JSON.stringify(settings)); } catch (e) {} }
 
 // ================= world =================
