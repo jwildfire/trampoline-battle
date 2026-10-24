@@ -163,6 +163,20 @@ body[data-skin="crayon"] .lvl .ln, body[data-skin="crayon"] .seg.games button { 
 kbd { font: 900 12px var(--ui); color: var(--ink); background: var(--card-2); border: 2px solid var(--ink); border-bottom-width: 3px; border-radius: 6px; padding: 0 5px; }
 .go-row { display: flex; flex-wrap: wrap; gap: 12px 14px; align-items: center; margin-bottom: 14px; }
 .go-row .note { flex: 1 1 200px; }
+.done { flex: none; height: 44px; max-width: 210px; padding: 0 14px; border: 3px solid var(--ink); border-radius: 999px; background: #3ccf8e; color: var(--ink);
+  box-shadow: 0 3px 0 var(--ink); font: 900 14px var(--ui); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.done:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--ink); }
+#confirm { background: rgba(22, 19, 44, .55); z-index: 5; }
+#confirm .panel { width: min(380px, 100%); text-align: center; animation: pop .3s cubic-bezier(.2,1.6,.4,1); }
+#cTitle { font-family: var(--display); font-size: clamp(28px, 6vw, 44px); line-height: 1; margin: 6px 0 18px; }
+.cBtns { display: flex; gap: 22px; justify-content: center; }
+.cBtns button { width: 96px; height: 96px; border-radius: 50%; border: 4px solid var(--ink); box-shadow: 0 6px 0 var(--ink); font: 900 52px var(--ui); color: #ffffff; line-height: 1; }
+.cBtns .yes { background: #3ccf8e; }
+.cBtns .no { background: #ec4a2f; }
+.cBtns button:active { transform: translateY(4px); box-shadow: 0 2px 0 var(--ink); }
+.shuf { width: 18px; height: 18px; vertical-align: -4px; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+.lvl.shufTile .shuf { width: 32px; height: 36px; }
 .moreBtn { font: 900 15px var(--ui); color: var(--ink); background: var(--card-2); border: 3px solid var(--ink); border-radius: 999px; padding: 7px 14px; box-shadow: 0 3px 0 var(--ink); }
 .moreBtn[aria-expanded="true"] { background: var(--sun); }
 .moreBtn[aria-expanded="true"] span { display: inline-block; transform: rotate(180deg); }
@@ -245,6 +259,7 @@ kbd { font: 900 12px var(--ui); color: var(--ink); background: var(--card-2); bo
 }
 @media (max-height: 520px) {
   #app { gap: 4px; padding-block: 4px; }
+  .done { height: 38px; font-size: 12px; max-width: 150px; }
   .looks { display: none; }
   .pad button { height: 42px; }
   .tool { width: 38px; height: 38px; }
@@ -301,13 +316,13 @@ kbd { font: 900 12px var(--ui); color: var(--ink); background: var(--card-2); bo
           </div>
           <div class="row">
             <div class="field" id="toField"><span class="lab" id="toLab">Points to win</span>
-              <div class="seg" id="toSeg"><button data-i="0" aria-pressed="false">5</button><button data-i="1" aria-pressed="true">10</button><button data-i="2" aria-pressed="false">20</button></div>
+              <div class="seg" id="toSeg"><button data-i="0" aria-pressed="true">You tell me</button><button data-i="1">5</button><button data-i="2">10</button><button data-i="3">20</button></div>
             </div>
             <div class="field"><span class="lab">Skin</span>
-              <div class="seg" id="skinSeg"><button data-v="comics">Comics</button><button data-v="arcade">8-Bit</button><button data-v="crayon">Crayon</button></div>
+              <div class="seg" id="skinSeg"><button data-v="random" title="Shuffle"><svg class="shuf" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7h3c4 0 6 10 10 10h4M3 17h3c4 0 6-10 10-10h4M17 4l3 3-3 3M17 14l3 3-3 3"/></svg><span class="sr">Shuffle</span></button><button data-v="comics">Comics</button><button data-v="arcade">8-Bit</button><button data-v="crayon">Crayon</button></div>
             </div>
             <div class="field"><span class="lab">Items</span>
-              <div class="seg" id="itemSeg"><button data-v="pixel">Pixel</button><button data-v="sticker">Sticker</button></div>
+              <div class="seg" id="itemSeg"><button data-v="random" title="Shuffle"><svg class="shuf" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7h3c4 0 6 10 10 10h4M3 17h3c4 0 6-10 10-10h4M17 4l3 3-3 3M17 14l3 3-3 3"/></svg><span class="sr">Shuffle</span></button><button data-v="pixel">Pixel</button><button data-v="sticker">Sticker</button></div>
             </div>
           </div>
           <div class="lab" style="margin-bottom:6px" id="lvlLab">Level</div>
@@ -319,6 +334,16 @@ kbd { font: 900 12px var(--ui); color: var(--ink); background: var(--card-2); bo
             <div class="keycard b" id="keyCard2"><b id="keyName2">Blue</b><br><kbd>←</kbd> <kbd>→</kbd> move · <kbd>↑</kbd> jump · <kbd>↓</kbd> slam<br><kbd>Enter</kbd> punch · <kbd>Shift</kbd> use item<br>On the crane: <kbd>↑</kbd> swap fighter, <kbd>↓</kbd> drop</div>
           </div>
           <p class="note">Fighters: Normal, Big Bruno, Baby Johnnys, Chunky Chuck and Cheeky Monkey. Grab the falling <b>?</b> crates for more fighters, animals and weird weapons.<br><i id="tip"></i></p>
+        </div>
+      </div>
+    </div>
+
+    <div id="confirm" class="overlay" hidden>
+      <div class="panel" role="dialog" aria-labelledby="cTitle">
+        <div id="cTitle">Time to go?</div>
+        <div class="cBtns">
+          <button class="yes" id="cYes" aria-label="Yes, finish the game">✓</button>
+          <button class="no" id="cNo" aria-label="No, keep playing">✗</button>
         </div>
       </div>
     </div>
@@ -344,6 +369,7 @@ kbd { font: 900 12px var(--ui); color: var(--ink); background: var(--card-2); bo
       <button class="tool" id="menuBtn" aria-label="Menu" title="Menu (Esc)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
       </button>
+      <button class="done" id="doneBtn" hidden>Done?</button>
       <button class="tool" id="muteBtn" aria-label="Sound on" title="Sound (M)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z" fill="currentColor"/><path id="waves" d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg>
       </button>
@@ -456,8 +482,10 @@ const LEVELS = [
 ];
 
 // ================= settings =================
-const settings = { names: ['Red', 'Blue'], mode: '2p', target: 10, level: 0, game: 'party', mini: 0, rounds: 3, pileRounds: 5, skin: 'comics', items: 'pixel', more: false };
+const settings = { names: ['Red', 'Blue'], mode: '2p', game: 'party', mini: 'random', level: 'random', rounds: 0, pileRounds: 0, target: 0, skin: 'random', items: 'random', more: false, v4: true };
 try { Object.assign(settings, JSON.parse(localStorage.getItem('tb3-settings') || '{}')); } catch (e) {}
+// new defaults: rounds are "you tell me" and everything else shuffles
+if (!settings.v4) Object.assign(settings, { v4: true, rounds: 0, pileRounds: 0, target: 0, skin: 'random', items: 'random', mini: 'random', level: 'random' });
 function saveSettings() { try { localStorage.setItem('tb3-settings', JSON.stringify(settings)); } catch (e) {} }
 
 // ================= world =================
@@ -1319,7 +1347,7 @@ const playing = () => ['aim', 'play', 'intro', 'live', 'roundEnd'].includes(G.ph
 
 function startMatch() {
   G.game = 'battle'; G.mini = null; G.hz = []; G.marks = []; G.fric = null; G.cannonsOn = false; G.dance = false; G.bigHead = false;
-  G.levelIdx = isRandom() ? (Math.random() * LEVELS.length) | 0 : settings.level;
+  G.levelIdx = isRandom() || settings.level === 'random' || !LEVELS[settings.level] ? (Math.random() * LEVELS.length) | 0 : settings.level;
   randomLook();
   G.score = [0, 0];
   G.wave = 0;
@@ -1340,6 +1368,7 @@ function startMatch() {
 // a wave: both teams hang from the crane, drop when ready, then battle
 function beginWave() {
   G.wave++; G.phase = 'aim'; G.phaseT = 0;
+  if (G.wave % 2 === 1) relabelDone();
   grav = level.grav || 1;
   G.eventMega = false; G.dance = false; G.bigHead = false;
   for (const tm of TEAMS) {
@@ -1464,7 +1493,7 @@ function loseBody(r, cause) {
   shake(9);
   sfx.splat(); sfx.point();
   G.slow = .45; G.slowT = .5;
-  if (G.score[scorer] >= settings.target) { G.phase = 'over'; G.overT = 1.6; G.winner = scorer; }
+  if (settings.target && G.score[scorer] >= settings.target) { G.phase = 'over'; G.overT = 1.6; G.winner = scorer; }
   else setTimeout(() => { if (playing()) give(r.team, pick(REWARDS), 'Revenge'); }, 700);
   renderHud();
 }
@@ -2527,8 +2556,8 @@ function saveBest(k, v, higher = true) {
 const fmtT = t => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
 
 function startGame() {
-  G.game = settings.game;
-  G.score = [0, 0]; G.round = 0; G.lives = 3; G.cleared = 0; G.cards = []; G.endlessBag = []; G.sched = [];
+  G.game = settings.game; G.paused = false; $('#confirm').hidden = true;
+  G.score = [0, 0]; G.round = 0; G.lives = 3; G.cleared = 0; G.played = 0; G.cards = []; G.endlessBag = []; G.sched = [];
   $('#banner').hidden = true;
   if (G.game === 'battle') { startMatch(); return; }
   nextRound();
@@ -2537,7 +2566,7 @@ function nextRound() {
   G.round++;
   let def;
   randomLook();
-  if (G.game === 'party') def = isRandom() ? endlessPick() : MINIS[settings.mini];
+  if (G.game === 'party') def = isRandom() || settings.mini === 'random' || !MINIS[settings.mini] ? endlessPick() : MINIS[settings.mini];
   else if (G.game === 'survival') def = SURVIVAL_DEF;
   else if (G.game === 'endless') {
     def = endlessPick();
@@ -2578,6 +2607,7 @@ function startRound(def) {
   if (def.npcs) addHazard('crowd', { n: def.npcs, weapons: def.npcWeapons });
   if (G.game === 'pileup') for (const k of G.cards) playCard(k, false);
   G.phase = 'intro'; G.phaseT = 0;
+  relabelDone();
   const label = G.game === 'endless' ? `Round ${G.round}` : G.game === 'pileup' ? (G.cards.length ? `+ ${CARDS[G.cards[G.cards.length - 1]][0]}` : 'Round 1') : null;
   G.toast = { text: G.game === 'pileup' ? label : def.name, sub: G.game === 'pileup' ? def.howto : def.howto, color: '#ffc928', t: 0, dur: 2.8 };
   sfx.turn();
@@ -2647,7 +2677,8 @@ function miniFrame(dt) {
     if (G.phaseT >= 2.8) { G.phase = 'live'; G.phaseT = 0; G.toast = { text: 'GO!', color: '#ffffff', t: 0 }; sfx.kick(); renderHud(); }
     return;
   }
-  if (G.phase === 'roundEnd') { if (G.phaseT >= 2.8) afterRound(); return; }
+  // with "you tell me" rounds the next level starts by itself after 5 seconds
+  if (G.phase === 'roundEnd') { if (G.phaseT >= (unlimited() ? 5 : 2.8)) afterRound(); return; }
   if (G.phase !== 'live') return;
   G.liveT += dt;
   G.heat = G.liveT / (def.heatTime || 45);
@@ -2693,6 +2724,7 @@ function endRound(winner, info) {
     else if (!pass && G.kept) { text = 'OUT!'; color = '#ffc928'; sub = `You lasted ${fmtT(info.time)}`; }
     else { text = pass ? 'CLEARED!' : 'FAILED!'; color = pass ? '#5ee08a' : '#ff3b3b'; sub = pass ? pick(['Nice bouncing', 'Too easy?', 'Legendary']) : pick(['So close', 'The trampoline wins this time', 'Try again']); }
     if (G.game === 'endless') { if (pass) G.cleared++; else G.lives--; sub += pass ? ` · ${G.cleared} cleared` : ` · ${G.lives} ${G.lives === 1 ? 'life' : 'lives'} left`; }
+    else if (unlimited()) { if (pass) G.cleared++; G.played = (G.played || 0) + 1; if (G.game === 'survival') { saveBest('survival', Math.floor(info.time)); G.cleared = Math.max(G.cleared, Math.floor(info.time)); } }
     if (pass && G.game === 'party') { const k = 'mini-' + def.id; if (def.rules === 'race' || def.goal) saveBest(k + '-t', info.time, false); }
   } else {
     if (winner != null) { G.score[winner]++; text = `${nameOf(winner)} wins the round!`; }
@@ -2704,9 +2736,11 @@ function endRound(winner, info) {
   else sfx.splat();
   renderHud();
 }
+const unlimited = () => (G.game === 'battle' ? settings.target : G.game === 'pileup' ? settings.pileRounds : G.game === 'endless' ? 0 : settings.rounds) === 0;
 function afterRound() {
   fx.confetti = [];
   const solo = G.result && G.result.solo;
+  if (unlimited() && !(G.game === 'endless' && solo && G.lives <= 0)) return nextRound();
   if (solo) {
     if (G.game === 'endless' && G.lives > 0) return nextRound();
     return showMiniBanner();
@@ -2758,6 +2792,55 @@ function showMiniBanner() {
   box.firstChild.focus({ preventScroll: true });
   if (!res.solo || res.winner === 0) { for (let i = 0; i < 120; i++) fx.confetti.push({ x: rand(0, W), y: rand(-300, -10), vx: rand(-40, 40), vy: rand(60, 220), a: rand(0, 6), va: rand(-6, 6), c: pick(['#ec4a2f', '#2f6fe0', '#ffc928', '#3ccf8e', '#ff4fd8']) }); sfx.cheer(); }
   renderHud();
+}
+
+// the Done? button changes its label every round
+const DONE_LABELS = ['Done?', 'Not yet', 'Enough already', 'Just one more', 'Really?', 'Bedtime?', 'One more round?', "I'm tired", 'Snack break?', 'Okay, okay',
+  'Five more minutes', 'Are we done?', 'Is it time?', 'Stop the bouncing', 'My legs hurt', 'Call it a day', "That's a wrap", 'Fine. Done.', 'Seriously?', 'Last one, promise',
+  'Pinky promise?', 'Homework?', "Dinner's ready", 'Teeth time', 'Pajamas?', 'Lights out?', 'Done-zo?', 'Over and out', 'Mercy!', 'Uncle!',
+  'I give up', 'No more boing', 'Retire?', 'Put it away?', 'Wrap it up', 'Nap time?', 'Clean up time', 'Say goodnight', 'See ya later?', 'Peace out?',
+  'Exit?', 'Quit while ahead?', 'End the madness', 'Make it stop', 'I need a hug', 'Brain full', 'Out of bounces', "Trampoline's tired", 'The cow wants to sleep', 'Gary needs a nap',
+  'Hang up the cape?', 'Hats off?', 'Shoes on?', "Car's leaving", 'Mom said so', 'Dad said so', 'Is it over?', 'We good?', 'Finish line?', 'Game over?',
+  'Done done?', 'Finito?', 'Fin?', 'The end?', 'Roll credits', 'Curtain call', 'Last bounce', 'Final boing', 'Enough boing', 'Boinged out',
+  'Splatted out', 'Too much cow', 'Chicken says stop', 'Bath time?', 'Bye bye?', 'Ta-ta for now?', 'Toodle-oo?', 'Later, gator?', 'In a while, crocodile?', 'Ready to stop?',
+  'Pause forever?', "Time's up?", 'Out of time?', 'Hit the hay?', 'Count sheep?', 'Zzz?', 'Yawn…', 'Okay fine', 'Alright already', 'For real done',
+  'No take-backs', 'Last chance', 'Wave goodbye', 'Shut it down', 'Power off?', 'Unplug?', 'Save some for tomorrow', 'Tomorrow?', 'Stop?', 'Done yet?'];
+function relabelDone() { const b = $('#doneBtn'); let t; do { t = pick(DONE_LABELS); } while (t === b.textContent && DONE_LABELS.length > 1); b.textContent = t; }
+function askDone() {
+  if (!playing() && G.phase !== 'over') return;
+  ac(); sfx.click();
+  G.paused = true;
+  $('#confirm').hidden = false; $('#cYes').focus({ preventScroll: true });
+}
+function answerDone(yes) {
+  ac(); sfx.click();
+  $('#confirm').hidden = true; G.paused = false;
+  if (yes) finishGame();
+}
+// pressing ✓ on Time to go?: show the final score
+function finishGame() {
+  G.phase = 'over'; G.toast = null; fx.confetti = [];
+  const box = $('#bBtns'); box.innerHTML = '';
+  const solo = isMini() && G.teams.length === 1;
+  let title, sub, color = '#16132c';
+  if (solo) {
+    if (G.game === 'survival') { title = `Best: ${fmtT(best.survival || 0)}`; sub = `${G.round} ${G.round === 1 ? 'run' : 'runs'} of Survival. Good bouncing!`; color = '#f29b17'; }
+    else { title = `${G.cleared} cleared`; sub = `${G.cleared} of ${Math.max(G.played || 0, G.cleared)} levels cleared. Good bouncing!`; color = '#2f6fe0'; }
+  } else {
+    const [a, b] = G.score;
+    if (a === b) { title = "It's a tie!"; sub = `${a} – ${b}. Everybody wins. Mostly the trampoline.`; }
+    else { const w = a > b ? 0 : 1; title = `${nameOf(w)} wins!`; color = PCOL[w]; sub = `Final score ${a} – ${b}. ${nameOf(1 - w)} says it was the cow's fault.`; }
+  }
+  $('#bTitle').textContent = title; $('#bTitle').style.color = color; $('#bSub').textContent = sub;
+  for (const [label, fn, alt] of [['Play again', startGame], ['Menu', openMenu, true]]) {
+    const b = document.createElement('button');
+    b.className = 'big' + (alt ? ' alt' : ''); b.textContent = label;
+    b.addEventListener('click', () => { ac(); sfx.click(); fn(); });
+    box.appendChild(b);
+  }
+  $('#banner').hidden = false; box.firstChild.focus({ preventScroll: true });
+  for (let i = 0; i < 120; i++) fx.confetti.push({ x: rand(0, W), y: rand(-300, -10), vx: rand(-40, 40), vy: rand(60, 220), a: rand(0, 6), va: rand(-6, 6), c: pick(['#ec4a2f', '#2f6fe0', '#ffc928', '#3ccf8e', '#ff4fd8']) });
+  sfx.cheer(); renderHud();
 }
 
 function keepGoing() {
@@ -2855,6 +2938,11 @@ function drawMiniHud() {
     mid = lim ? fmtT(Math.max(0, lim - T)) : fmtT(T);
   }
   if (G.game === 'endless' && solo) mid += `   ♥${G.lives}`;
+  if (G.phase === 'roundEnd' && unlimited() && !(G.game === 'endless' && solo && G.lives <= 0)) {
+    const n = Math.max(1, Math.ceil(5 - G.phaseT));
+    ctx.font = Math.round(22 * FDK) + 'px ' + FD; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.lineWidth = 6; ctx.strokeStyle = INK;
+    const t = `Next level in ${n}…`; ctx.strokeText(skinWord(t), W / 2, 360); ctx.fillStyle = '#ffffff'; ctx.fillText(skinWord(t), W / 2, 360);
+  }
   ctx.font = Math.round(20 * FDK) + 'px ' + FD; ctx.textBaseline = 'middle'; ctx.textAlign = 'center';
   const y = 24, w = Math.max(90, ctx.measureText(mid).width + 30), cx = def.hudX || W / 2;
   ctx.fillStyle = INK; roundRect(cx - w / 2 - 3, y - 17, w + 6, 34, 12); ctx.fill();
@@ -3948,12 +4036,13 @@ const SKINS = {
 const SKIN_ORDER = ['comics', 'arcade', 'crayon'];
 let FD = SKINS.comics.font, FDK = 1;
 // "Just Bounce" (More stuff closed) rolls a random skin and item style each round into G.look
-const skin = () => (G.look && G.look.skin) || settings.skin || 'comics';
-const itemStyle = () => (G.look && G.look.items) || settings.items || 'pixel';
+const skin = () => (G.look && G.look.skin) || (settings.skin !== 'random' && settings.skin) || 'comics';
+const itemStyle = () => (G.look && G.look.items) || (settings.items !== 'random' && settings.items) || 'pixel';
 const isRandom = () => !settings.more;
 function randomLook() {
-  if (!isRandom()) { if (G.look) { G.look = null; applySkin(); buildIcons(); } return; }
-  G.look = { skin: pick(SKIN_ORDER), items: pick(['pixel', 'sticker']) };
+  const rs = isRandom() || settings.skin === 'random', ri = isRandom() || settings.items === 'random';
+  if (!rs && !ri) { if (G.look) { G.look = null; applySkin(); buildIcons(); } return; }
+  G.look = { skin: rs ? pick(SKIN_ORDER) : settings.skin, items: ri ? pick(['pixel', 'sticker']) : settings.items };
   applySkin(); buildIcons();
   padState[0] = {}; padState[1] = {};
   renderLooks();
@@ -4964,11 +5053,15 @@ function renderHud() {
   const mini = isMini();
   $('#n1').textContent = nameOf(0); $('#n2').textContent = nameOf(1);
   $('#s1').textContent = G.score[0]; $('#s2').textContent = G.score[1];
-  const tgt = G.game === 'battle' ? settings.target : G.game === 'pileup' ? settings.pileRounds : G.game === 'endless' ? '∞' : settings.rounds;
+  const tgt = (G.game === 'battle' ? settings.target : G.game === 'pileup' ? settings.pileRounds : G.game === 'endless' ? 0 : settings.rounds) || '∞';
   $('#o1').textContent = '/' + tgt; $('#o2').textContent = '/' + tgt;
   const solo = mini && G.teams.length === 1;
   $('#pl2').style.visibility = solo || (settings.mode === 'solo' && G.phase === 'menu' && settings.game !== 'battle') ? 'hidden' : '';
-  if (solo) { $('#s1').textContent = G.game === 'endless' ? G.cleared : '♥'; $('#o1').textContent = G.game === 'endless' ? ` cleared · ♥${G.lives}` : ''; }
+  if (solo) {
+    const unl = unlimited() && G.game !== 'endless';
+    $('#s1').textContent = G.game === 'endless' || unl ? (G.game === 'survival' ? fmtT(best.survival || 0) : G.cleared) : '♥';
+    $('#o1').textContent = G.game === 'endless' ? ` cleared · ♥${G.lives}` : unl ? (G.game === 'survival' ? ' best' : ` cleared of ${G.played}`) : '';
+  }
   $('#lvlName').textContent = mini ? G.mini.name : level.name;
   $('#waveTxt').textContent = G.phase === 'menu' ? 'Pick a level' : G.phase === 'over' ? 'Game over'
     : mini ? `${GAME_INFO[G.game][0]} · round ${G.round}${G.mini.rules ? ' · ' + RULE_TAG[G.mini.rules] : ''}`
@@ -4984,6 +5077,7 @@ function renderHud() {
   }
   $('#pad1').hidden = settings.mode !== '2p';
   $('#keyCard2').hidden = false;
+  $('#doneBtn').hidden = !(playing() && unlimited());
 }
 
 const padState = [{}, {}];
@@ -5014,6 +5108,7 @@ function updateControls() {
 }
 
 // ================= menu =================
+const SHUF_SVG = '<svg class="shuf" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7h3c4 0 6 10 10 10h4M3 17h3c4 0 6-10 10-10h4M17 4l3 3-3 3M17 14l3 3-3 3"/></svg>';
 const RULE_TAG = { survive: 'Survival', brawl: 'Brawl', ko: 'Knockouts', score: 'Score', race: 'Race' };
 const GAME_INFO = {
   battle: ['Battle', 'Both teams drop a fighter at the same time, then battle. Knock an enemy off the trampoline to score.'],
@@ -5022,10 +5117,11 @@ const GAME_INFO = {
   pileup: ['Pile-Up', 'Start with nothing. Every round adds one more chaos card, and they all stay. The last rounds get very silly.'],
   endless: ['Endless', 'Thrown into a random party level, then another, then another. The rare levels from the bottom of the list turn up about once every 10 rounds. Solo: 3 lives, how far can you get?'],
 };
+// 0 means "you tell me": keep playing until someone presses Done
 function toOptions() {
-  if (settings.game === 'battle') return { lab: 'Points to win', vals: [5, 10, 20], key: 'target' };
-  if (settings.game === 'pileup') return { lab: 'Rounds to win', vals: [3, 5, 7], key: 'pileRounds' };
-  return { lab: 'Rounds to win', vals: [1, 2, 3], key: 'rounds' };
+  if (settings.game === 'battle') return { lab: 'Points to win', vals: [0, 5, 10, 20], key: 'target' };
+  if (settings.game === 'pileup') return { lab: 'Rounds to win', vals: [0, 3, 5, 7], key: 'pileRounds' };
+  return { lab: 'Rounds to win', vals: [0, 1, 2, 3], key: 'rounds' };
 }
 function buildMenu() {
   const g = settings.game, box = $('#levels');
@@ -5039,6 +5135,12 @@ function buildMenu() {
     const tier = settings.tier || 0, inTier = L => tier === 0 ? L.rank <= 20 : tier === 1 ? L.rank > 20 && L.rank <= 50 : L.rank > 50;
     $('#tierSeg').hidden = g !== 'party' || MINIS.length <= 20;
     for (const b of $('#tierSeg').children) b.setAttribute('aria-pressed', String(+b.dataset.v === tier));
+    const shuf = document.createElement('button');
+    const isShuf = (g === 'battle' ? settings.level : settings.mini) === 'random' || !list[sel];
+    shuf.className = 'lvl shufTile'; shuf.setAttribute('aria-pressed', String(isShuf));
+    shuf.innerHTML = `${SHUF_SVG}<span class="ln">Shuffle</span><span class="tagr">${g === 'battle' ? 'Random arena' : 'Random every round'}</span>`;
+    shuf.addEventListener('click', () => { ac(); sfx.click(); if (g === 'battle') settings.level = 'random'; else settings.mini = 'random'; saveSettings(); buildMenu(); previewLevel(); });
+    box.appendChild(shuf);
     list.forEach((L, i) => {
       if (g === 'party' && MINIS.length > 20 && !inTier(L)) return;
       const b = document.createElement('button');
@@ -5049,7 +5151,8 @@ function buildMenu() {
       box.appendChild(b);
     });
     const L = list[sel];
-    $('#lvlBlurb').textContent = `${L.name}: ${L.blurb}${L.howto ? ' ' + L.howto : ''}`;
+    $('#lvlBlurb').textContent = isShuf ? (g === 'battle' ? 'Shuffle: a random arena every match.' : 'Shuffle: a random level every round. The rare ones from the bottom of the list turn up about once every 10 rounds.')
+      : `${L.name}: ${L.blurb}${L.howto ? ' ' + L.howto : ''}`;
   } else {
     $('#lvlLab').textContent = 'How it works';
     const ic = { survival: 'heart', pileup: 'pile', endless: 'dice' }[g];
@@ -5066,8 +5169,8 @@ function buildMenu() {
     : g === 'battle' ? 'A random arena, skin and items.' : g === 'party' ? 'A random level, skin and items every round.' : 'A random skin and items every round.';
   const o = toOptions();
   $('#toLab').textContent = o.lab;
-  $('#toField').hidden = g === 'endless' || (settings.mode === 'solo' && g !== 'battle' && g !== 'pileup');
-  [...$('#toSeg').children].forEach((b, i) => { b.textContent = o.vals[i]; b.setAttribute('aria-pressed', String(settings[o.key] === o.vals[i])); });
+  $('#toField').hidden = g === 'endless';
+  [...$('#toSeg').children].forEach((b, i) => { b.textContent = o.vals[i] || 'You tell me'; b.setAttribute('aria-pressed', String((settings[o.key] || 0) === o.vals[i])); });
   $('#name1').value = settings.names[0]; $('#name2').value = settings.names[1];
   buildMenuNames();
   for (const b of $('#modeSeg').children) b.setAttribute('aria-pressed', String(b.dataset.v === settings.mode));
@@ -5075,8 +5178,9 @@ function buildMenu() {
 function previewLevel() {
   G.game = settings.game;
   const g = settings.game;
-  if (g === 'battle' || g === 'pileup') buildLevel(g === 'battle' ? settings.level : 0);
-  else buildLevel(-1, g === 'party' ? MINIS[settings.mini] : g === 'survival' ? SURVIVAL_DEF : MINIS[(Math.random() * MINIS.length) | 0]);
+  const anyMini = () => MINIS[(Math.random() * Math.min(20, MINIS.length)) | 0];
+  if (g === 'battle' || g === 'pileup') buildLevel(g === 'battle' && LEVELS[settings.level] ? settings.level : (Math.random() * LEVELS.length) | 0);
+  else buildLevel(-1, g === 'party' ? MINIS[settings.mini] || anyMini() : g === 'survival' ? SURVIVAL_DEF : anyMini());
   G.mini = null; G.hz = []; G.marks = [];
   for (const tm of TEAMS) { tm.hanging = []; tm.active = []; tm.items = []; }
   const top = beds.reduce((a, b) => b.x2 - b.x1 > a.x2 - a.x1 ? b : a, bed);
@@ -5089,7 +5193,7 @@ function previewLevel() {
   renderHud();
 }
 function openMenu() {
-  G.phase = 'menu';
+  G.phase = 'menu'; G.paused = false; $('#confirm').hidden = true;
   if (G.look) { G.look = null; applySkin(); buildIcons(); renderLooks(); padState[0] = {}; padState[1] = {}; }
   $('#banner').hidden = true;
   fx.confetti = []; G.toast = null;
@@ -5134,9 +5238,9 @@ function bindMenu() {
 // skin and item style can change any time, even mid-game
 function setLook(k, v) {
   ac(); sfx.click();
-  // picking a look by hand wins over the random one for the rest of the round
-  if (G.look) { settings.skin = skin(); settings.items = itemStyle(); G.look = null; buildIcons(); }
   settings[k] = v; saveSettings();
+  // a look picked by hand takes effect right away, even in the middle of a shuffled round
+  if (G.look) G.look[k] = v === 'random' ? (k === 'skin' ? pick(SKIN_ORDER) : pick(['pixel', 'sticker'])) : v;
   if (k === 'skin') applySkin();
   else buildIcons();
   padState[0] = {}; padState[1] = {};
@@ -5145,8 +5249,8 @@ function setLook(k, v) {
 function renderLooks() {
   $('#skinBtn').textContent = SKINS[skin()].label;
   $('#itemBtn').textContent = itemStyle() === 'sticker' ? 'Sticker items' : 'Pixel items';
-  for (const b of $('#skinSeg').children) b.setAttribute('aria-pressed', String(b.dataset.v === skin()));
-  for (const b of $('#itemSeg').children) b.setAttribute('aria-pressed', String(b.dataset.v === settings.items));
+  for (const b of $('#skinSeg').children) b.setAttribute('aria-pressed', String(b.dataset.v === (settings.skin || 'random')));
+  for (const b of $('#itemSeg').children) b.setAttribute('aria-pressed', String(b.dataset.v === (settings.items || 'random')));
 }
 function buildMenuNames() {
   $('#keyName1').textContent = settings.mode !== '2p' ? `${nameOf(0)} (either set of keys)` : nameOf(0);
@@ -5194,6 +5298,7 @@ addEventListener('keydown', e => {
   if (m || e.code === 'Space') e.preventDefault();
   if (e.repeat) return;
   ac();
+  if (!$('#confirm').hidden) { if (e.code === 'Enter' || e.code === 'KeyY') answerDone(true); else if (e.code === 'Escape' || e.code === 'KeyN') answerDone(false); return; }
   if (G.phase === 'menu') { if (e.code === 'Enter') $('#startBtn').click(); return; }
   if (G.phase === 'over') { if ((e.code === 'Space' || e.code === 'Enter') && !$('#banner').hidden) $('#bBtns button').click(); return; }
   if (e.code === 'Escape') { openMenu(); return; }
@@ -5242,6 +5347,9 @@ const dragEnd = () => { dragTeam = -1; };
 cv.addEventListener('pointerup', dragEnd); cv.addEventListener('pointercancel', dragEnd);
 
 $('#menuBtn').addEventListener('click', () => { ac(); sfx.click(); openMenu(); });
+$('#doneBtn').addEventListener('click', askDone);
+$('#cYes').addEventListener('click', () => answerDone(true));
+$('#cNo').addEventListener('click', () => answerDone(false));
 function toggleMute() {
   muted = !muted;
   $('#waves').style.display = muted ? 'none' : '';
@@ -5257,6 +5365,7 @@ function loop(now) {
   acc += dt * G.slow;
   let steps = 0;
   // one bad frame should never freeze the game, so keep looping even if something throws
+  if (G.paused) acc = 0;
   try {
     while (acc >= DT && steps < 4) { frame(DT); acc -= DT; steps++; }
     if (steps === 4) acc = 0;
