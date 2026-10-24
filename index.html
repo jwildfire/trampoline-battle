@@ -1795,7 +1795,10 @@ function updateItems(dt) {
     }
     if (['banana', 'bomb', 'crate', 'bowling', 'cannonball', 'bbomb', 'minibomb', 'pie'].includes(it.kind)) it.ang += (v.x * dt) / p.r * .6;
     else it.ang = clamp(v.x / 2000, -.3, .3);
-    if (it.age > it.life || it.groundT > 2 || p.x < -150 || p.x > W + 150 || p.y < -1500) removeItem(it, p.x > 0 && p.x < W && p.y > 0);
+    // on scrolling levels "off the edge" means far from the camera, not off the fixed screen
+    const out = G.eng ? p.x < G.cam.x - 1600 || p.x > G.cam.x + W / G.cam.z + 1600 || p.y < G.cam.y - 1600 || p.y > G.cam.y + H / G.cam.z + 1600
+      : p.x < -150 || p.x > W + 150 || p.y < -1500;
+    if (it.age > it.life || it.groundT > 2 || out) removeItem(it, !G.eng && p.x > 0 && p.x < W && p.y > 0);
   }
 }
 function nearestTarget(it) {
@@ -3396,7 +3399,8 @@ function climbSpawn(t) {
     // back in on a ledge low on the screen
     const ok = C.ledges.filter(L => !L.off && L.y1 > cam.y + H * .45 && L.y1 < cam.y + H - 70 && !['crumble', 'spring', 'cloud', 'move'].includes(L.type));
     const L = ok.length ? pick(ok) : null;
-    if (L) { x = (L.x1 + L.x2) / 2; y = L.y1 - 90; } else { x = 480; y = cam.y + H * .5; }
+    // nowhere safe to stand? put a plank under them
+    if (L) { x = (L.x1 + L.x2) / 2; y = L.y1 - 90; } else { x = 480; y = cam.y + H * .5; addLedge(400, 560, y + 70); }
   }
   const r = makeRag(t, def.body || 'normal', x, y, 'air');
   r.active = true; r.face = t ? -1 : 1;
@@ -3408,8 +3412,9 @@ function climbSpawn(t) {
 function climbJump(r) {
   if (r.lost || r.jumpCD > 0) return true;
   const v = vel(r.p.pelvis);
-  if (!r.touch) {
-    if (G.t - (r.wallT || -9) < .2) {
+  const feet = [r.p.fL, r.p.fR, r.p.kL, r.p.kR, r.p.pelvis].some(p => p && (p.supT < 16 || p.bedT < 16));
+  if (!feet || v.y < -160) {
+    if (G.t - (r.wallT || -9) < .2 && v.y > -300) {
       r.jumpCD = .22; const d = r.wallDir || 1;
       for (const p of r.list) setVel(p, d * 440, -780);
       r.face = d; pop('WALL JUMP!', r.p.head.x, r.p.head.y - 30, '#7fd6ff', 16); sfx.jump();
@@ -12552,6 +12557,1013 @@ MINIS.push({
   },
 });
 
+// ================= climbing levels 11-20 (batch yb) =================
+// Small engine hooks these levels use. Each one passes straight through to the engine when the level doesn't ask for it,
+// and each calls the previous version, so other fragments can hook the same functions.
+const yb_E = ENG.climb, yb_jump0 = yb_E.jump, yb_press0 = yb_E.press, yb_pin0 = yb_E.pin;
+// level.yb_jump(r, engineJump): replaces a jump (call engineJump(r) for the normal one)
+// In these levels you jump off your feet (or knees or bottom), and not while you're already flying upward: otherwise
+// flailing arms and legs brush every ledge on the way up and chain jumps all the way to the top in a couple of seconds.
+const yb_FEET = ['pelvis', 'kL', 'kR', 'fL', 'fR'];
+yb_E.jump = r => {
+  const mine = G.mini && G.mini.id && G.mini.id.startsWith('yb_'), was = r.touch;
+  if (mine && was && (vel(r.p.pelvis).y < -160 || !yb_FEET.some(k => r.p[k].supT < 16 || r.p[k].bedT < 16))) r.touch = false;
+  const cd = r.jumpCD, res = G.mini && G.mini.yb_jump ? G.mini.yb_jump(r, yb_jump0) : yb_jump0(r);
+  r.touch = was;
+  if (r.jumpCD !== cd) yb_boost(r);
+  return res;
+};
+// level.yb_press(t, a, lv): return true to swallow a button press
+yb_E.press = (t, a, lv) => (G.mini && G.mini.yb_press && G.mini.yb_press(t, a, lv)) || yb_press0(t, a, lv);
+// level.yb_pin(): runs every physics substep, after collisions (for holding things in place)
+// Also: a floppy hand that lands on a ledge while you fly past works like a pull-up and keeps flinging you upward,
+// ledge after ledge (a computer climber reaches the top of a tall tower in about 4 seconds). In these levels you never
+// rise faster than your last real jump or launch would carry you (yb_boost records it).
+yb_E.pin = () => {
+  if (yb_pin0) yb_pin0();
+  if (!G.mini) return;
+  if (G.mini.yb_pin) G.mini.yb_pin();
+  if (!G.mini.id || !G.mini.id.startsWith('yb_')) return;
+  for (const r of rags) {
+    if (r.lost || r.kin || r.yb_vine || G.st < (r.springT || 0) + .6) continue;
+    const up = Math.max(200, -(r.yb_bv || 0) - 1100 * grav * (G.st - (r.yb_bt ?? -99))) + 40;
+    const vy = (r.p.pelvis.y - r.p.pelvis.py) / SDT;
+    if (vy < -up) for (const p of r.list) p.py -= (-up - vy) * SDT;
+  }
+};
+// coming back in mid-air with nothing under you (every low ledge crumbled or ghostly): a plank appears to catch you
+const yb_spawn0 = yb_E.spawn;
+yb_E.spawn = t => {
+  const r = yb_spawn0(t);
+  if (r && G.phase === 'live' && G.mini && G.mini.id && G.mini.id.startsWith('yb_') && G.climb) {
+    const x = r.p.pelvis.x, y = r.p.pelvis.y;
+    if (!G.climb.ledges.some(L => !L.off && x > L.x1 + 10 && x < L.x2 - 10 && L.y1 > y && L.y1 < y + 260)) addLedge(x - 80, x + 80, y + 95, { type: 'normal' });
+  }
+  return r;
+};
+function yb_boost(r) { r.yb_bt = G.t; r.yb_bv = Math.min(vel(r.p.pelvis).y, -400); }
+
+const yb_players = () => { const out = []; for (const t of G.teams) for (const r of TEAMS[t].active) if (!r.lost && !r.kin) out.push(r); return out; };
+// the ledge a fighter is standing on right now
+const yb_on = r => { for (const p of r.list) if (p.supT < 3 && p.onSeg) return p.onSeg; return null; };
+// the first player touching an item (kinematic items don't collide, so they check for themselves)
+function yb_near(it, extra = 0) {
+  for (const r of yb_players()) for (const p of r.list) { const dx = p.x - it.p.x, dy = p.y - it.p.y, rr = p.r + it.p.r + extra; if (dx * dx + dy * dy < rr * rr) return r; }
+  return null;
+}
+function yb_text(s, x, y, size, col, align = 'center') {
+  ctx.font = Math.round(size * FDK) + 'px ' + FD; ctx.textAlign = align; ctx.textBaseline = 'middle';
+  ctx.lineWidth = Math.max(3, size / 4); ctx.strokeStyle = INK; ctx.strokeText(s, x, y); ctx.fillStyle = col; ctx.fillText(s, x, y);
+}
+const yb_jumped = (r, f) => { const cd = r.jumpCD; f(r); return r.jumpCD !== cd; };
+// zig-zag ledges: [x1, x2, y] from y0 up to yTop, the centres hopping left and right
+function yb_zigzag(y0, yTop, step, w, xs) {
+  const out = []; let i = 0;
+  for (let y = y0; y > yTop; y -= step, i++) { const cx = xs[i % xs.length]; out.push([cx - w / 2, cx + w / 2, y]); }
+  return out;
+}
+// a ledge low on the screen to put things back on
+function yb_lowLedge() {
+  const C = G.climb, cam = G.cam;
+  const ok = C.ledges.filter(L => !L.off && L.type !== 'ground' && L.type !== 'summit' && L.y1 > cam.y + H * .35 && L.y1 < cam.y + H - 70);
+  return ok.length ? pick(ok) : null;
+}
+
+Object.assign(SPRITES, {
+  yb_monkey: [[
+    '...BBBB...',
+    '.bBBBBBBb.',
+    'bbBnnnnBbb',
+    '.BnknnknB.',
+    '.BnnnnnnB.',
+    '..BnkknB..',
+    '...BBBB...',
+    '.BBBBBBBB.',
+    'B.BBBBBB.B',
+    '..BB..BB..',
+  ], [
+    '...BBBB...',
+    '.bBBBBBBb.',
+    'bbBnnnnBbb',
+    '.BnknnknB.',
+    '.BnnnnnnB.',
+    '..BnkknB..',
+    'B..BBBB..B',
+    '.BBBBBBBB.',
+    '..BBBBBB..',
+    '.BB....BB.',
+  ]],
+  yb_egg: [[
+    '...yyy...',
+    '..yyyyy..',
+    '.yswyyyy.',
+    '.yswyyyY.',
+    'yysyyyyYY',
+    'yyyyyyyYY',
+    'yyyyyyYYY',
+    '.yyyyYYY.',
+    '..YYYYY..',
+  ]],
+  yb_belt: [[
+    '.kkkkkkkkkk.',
+    'kxxxxxxxxxxk',
+    'kxmxxmxxmxxk',
+    'kxxmxxmxxmxk',
+    'kxmxxmxxmxxk',
+    'kxxxxxxxxxxk',
+    '.kkkkkkkkkk.',
+    '..k......k..',
+  ]],
+  yb_beans: [[
+    '.gggggg.',
+    'gGGGGGGg',
+    'eeeeeeee',
+    'ewwwwwwe',
+    'ewbbbbwe',
+    'ewbBbBwe',
+    'ewwwwwwe',
+    'eeeeeeee',
+    'gGGGGGGg',
+    '.gggggg.',
+  ]],
+  yb_gem: [[
+    '..rrrr..',
+    '.rwrrRr.',
+    'rwrrrRRr',
+    'rrrrrRRr',
+    '.rrrRRr.',
+    '..rRRr..',
+    '...rr...',
+  ]],
+  yb_biggem: [[
+    '..vvvvvv..',
+    '.vwvvvvVv.',
+    'vwvvvvvVVv',
+    'vvvvvvvVVv',
+    '.vvvvvVVv.',
+    '..vvvVVv..',
+    '...vVVv...',
+    '....vv....',
+  ]],
+  yb_ladder: [[
+    '.x.....x..y.',
+    '.xxxxxxx.yy.',
+    '.x.....xyy..',
+    '.x.....yyyy.',
+    '.xxxxxxx.yy.',
+    '.x.....xyy..',
+    '.x.....xy...',
+    '.xxxxxxx....',
+    '.x.....x....',
+  ]],
+  yb_peak: [[
+    '.....kyy....',
+    '.....kyyy...',
+    '.....kyy....',
+    '.....k......',
+    '....bbbb....',
+    '...bbbbbb...',
+    '..bbbbbbbb..',
+    '.bbbbbbbbbb.',
+    'cccc....cccc',
+  ]],
+  yb_peel: [[
+    '....YY....',
+    '....yY....',
+    '...yyYy...',
+    '..yy.y.yy.',
+    '.yy..y..yy',
+    'yY...y...Y',
+    'Y.........',
+  ]],
+  yb_flip: [[
+    'rrrrrr......',
+    'rRRRRr......',
+    'rrrrrr......',
+    '......CC.CC.',
+    '......C....C',
+    '......CC.CC.',
+  ]],
+  yb_key: [[
+    '.YYY........',
+    'Y...Y.......',
+    'Y.s.YYYYYYYY',
+    'Y...Y...Y.Y.',
+    '.YYY....Y.Y.',
+  ]],
+});
+
+// ---------- items ----------
+Object.assign(ITEMS, {
+  // a monkey who thinks you're a banana: hops after climbers and rides on their heads
+  yb_monkey: { label: 'Monkey', r: 12, m: .5, life: 1e9, sprite: 'yb_monkey', fric: .3,
+    update(it, dt) {
+      const p = it.p, R = it.yb_rider;
+      if (R) {
+        if (R.lost || !rags.includes(R) || G.t > it.yb_until) { yb_monkeyOff(it); return false; }
+        p.x = R.p.head.x - R.face * 4; p.y = R.p.head.y - 18; p.px = p.x; p.py = p.y; it.flip = R.face; it.ang = Math.sin(G.t * 16) * .25;
+        return false;
+      }
+      if (it.yb_gone) { if (G.t > it.yb_gone) removeItem(it, true); it.ang += dt * 9; return false; }
+      it.ang = 0;
+      if ((p.supT < 10) && it.timer <= 0) {
+        let tg = null, bd = 1e9;
+        for (const r of yb_players()) { const d = Math.hypot(r.p.pelvis.x - p.x, r.p.pelvis.y - p.y); if (d < bd) { bd = d; tg = r; } }
+        const dir = tg ? Math.sign(tg.p.pelvis.x - p.x) || 1 : (Math.random() < .5 ? -1 : 1);
+        addVel(p, dir * rand(140, 260), -rand(480, 680)); it.flip = dir; it.timer = rand(.45, 1);
+        if (Math.random() < .3) sfx.chitter();
+      }
+      if (it.age > .4 && !G.yb_v.noRide) { const r = yb_near(it, 3); if (r && !r.yb_monkey) yb_monkeyOn(it, r); }
+      if (p.y > G.cam.y + H + 60 || it.age > 25) removeItem(it, false);
+      return false;
+    } },
+  yb_beans: { label: 'Beans', r: 13, m: .3, life: 1e9, sprite: 'yb_beans',
+    update(it) {
+      const p = it.p; p.x = it.yb_x; p.y = it.yb_y + Math.sin(G.t * 3 + it.yb_x) * 6; p.px = p.x; p.py = p.y; it.ang = Math.sin(G.t * 2 + it.yb_x) * .2;
+      const r = yb_near(it, 6);
+      if (r && G.phase !== 'roundEnd') {
+        r.yb_toots = Math.min(5, (r.yb_toots || 0) + 1);
+        pop(pick(['BEANS!', 'YUM!', '+1 TOOT']), p.x, p.y - 26, '#9be05a', 18); sfx.pickup(); removeItem(it, false); return false;
+      }
+      if (p.y > G.cam.y + H + 40) removeItem(it, false);
+      return false;
+    } },
+  yb_gem: { label: 'Gem', r: 11, m: .4, life: 1e9, sprite: 'yb_gem', update: it => yb_gemTick(it) },
+  yb_biggem: { label: 'Big Gem', r: 14, m: .5, life: 1e9, sprite: 'yb_biggem', update: it => yb_gemTick(it) },
+  yb_peel: { label: 'Banana Peel', r: 10, m: .3, life: 1e9, sprite: 'yb_peel',
+    update(it) {
+      const p = it.p;
+      if (!it.yb_set && it.age > .15 && p.supT < 3) { it.yb_set = true; p.slide = .1; }
+      if (it.yb_set) { p.px = p.x; it.ang = 0; } else it.ang += .3;
+      if (p.y > G.cam.y + H + 40 || it.age > 40) removeItem(it, false);
+      return false;
+    },
+    onTouch(it, o, ip, dir, op) {
+      if (o.type !== 'rag' || o.lost || o.kin) return;
+      if (!it.yb_set) { if (o !== it.yb_by && it.age > .1 && (o.yb_bonkT || 0) < G.t) { o.yb_bonkT = G.t + .5; pushBody(o, dir * 160, -80); pop('SPLAT!', ip.x, ip.y - 20, '#ffd93b', 16); sfx.slap(); } return; }
+      if (it.age < .5 || !['fL', 'fR', 'kL', 'kR'].includes(op.tag)) return;
+      const sd = Math.sign(vel(o.p.pelvis).x) || -dir, k = massK(o);
+      pushBody(o, sd * 620 * k, -240 * k); o.dropT = G.t + .2; o.yb_slipT = G.t + .8;
+      pop(pick(['SLIP!', 'WHOOPS!', 'BANANA\'D!']), ip.x, ip.y - 30, '#ffd93b', 22); sfx.slip(); removeItem(it, false);
+    } },
+  yb_key: { label: 'Key', r: 12, m: .6, life: 1e9, sprite: 'yb_key', update: it => yb_keyTick(it) },
+});
+
+// ================= 11. Vine Swingers =================
+const yb_VINE_LEDGES = [], yb_VINES = [];
+for (let i = 0, y = 420; i < 16; i++, y -= 165) {
+  const cx = i % 2 ? 680 : 280;
+  yb_VINE_LEDGES.push([cx - 110, cx + 110, y]);
+  // a vine hangs in the gap on the way to the next ledge
+  if (i < 15) yb_VINES.push({ ax: 480 + (i % 2 ? 30 : -30), ay: y - 330, L: 200, A: .95, w: 2.3 + (i % 3) * .2, ph: i * 1.7, toX: i % 2 ? 280 : 680 });
+}
+function yb_tip(v, t) {
+  const a = v.A * Math.sin(v.w * t + v.ph), da = v.A * v.w * Math.cos(v.w * t + v.ph);
+  return { x: v.ax + v.L * Math.sin(a), y: v.ay + v.L * Math.cos(a), vx: v.L * Math.cos(a) * da, vy: -v.L * Math.sin(a) * da };
+}
+function yb_letGo(r, fling) {
+  const v = r.yb_vine; if (!v) return;
+  r.yb_vine = null; r.yb_vCD = G.t + .6;
+  if (!fling) return;
+  const tp = yb_tip(v, G.t);
+  for (const p of r.list) setVel(p, tp.vx * 1.25 + r.move * 120, Math.min(tp.vy, 0) * .8 - 780);
+  r.jumpCD = .25; yb_boost(r);
+  pop(pick(['WHEEE!', 'FLING!', 'AAAAH-AH-AAAH!']), r.p.head.x, r.p.head.y - 34, '#9be05a', 18); sfx.whoosh();
+}
+function yb_monkeyOn(it, r) {
+  it.yb_rider = r; it.p.kin = true; r.yb_monkey = it; r.yb_shake = 0; it.yb_until = G.t + 6;
+  pop(pick(['OOK OOK!', 'BANANA?!', 'EEK!']), r.p.head.x, r.p.head.y - 46, '#c4884f', 20); sfx.chitter();
+}
+function yb_monkeyOff(it) {
+  const r = it.yb_rider; if (r) r.yb_monkey = null;
+  it.yb_rider = null; it.p.kin = false; it.yb_gone = G.t + 1.2;
+  setVel(it.p, rand(-320, 320), -rand(380, 520));
+  if (r && !r.lost) pop(pick(['SHOO!', 'BYE MONKEY!', 'GET OFF!']), r.p.head.x, r.p.head.y - 40, '#ffffff', 18);
+}
+function yb_shakeMonkey(r, n) { if (!r.yb_monkey) return; r.yb_shake = (r.yb_shake || 0) + n; if (r.yb_shake >= 3) yb_monkeyOff(r.yb_monkey); }
+
+MINIS.push({
+  id: 'yb_vines', engine: 'climb', rank: 11, name: 'Vine Swingers', icon: 'yb_monkey', rules: 'race', goal: 1, soloGoal: 1, time: 150, soloTime: 100,
+  howto: 'Jump into a vine to grab it, press up to let go and FLING! Punch or jump to shake off monkeys.', blurb: 'A jungle tower of swinging vines, and monkeys who think you are a banana.',
+  sky: ['#3f9a5a', '#c9f2a8'], wallCol: '#6b4a2a', groundCol: '#4cbb47',
+  ledges: yb_VINE_LEDGES, top: -2320, summitX1: 400, summitX2: 640, spawn: [[540, 420], [760, 420]],
+  setup() { G.yb_v = { monkeyT: 4 }; },
+  tick(dt) {
+    const S = G.yb_v, cam = G.cam;
+    for (const r of yb_players()) {
+      if (r.yb_vine) {
+        // computer climbers let go on the up-swing, heading for the next ledge
+        if (isCpu(r.team)) {
+          const tp = yb_tip(r.yb_vine, G.t);
+          r.yb_hold = (r.yb_hold || 0) + dt;
+          if ((tp.vy < -40 && Math.sign(tp.vx) === Math.sign(r.yb_vine.toX - tp.x) && Math.random() < .2) || r.yb_hold > 3) yb_letGo(r, true);
+        }
+        continue;
+      }
+      if (r.touch || G.t < (r.yb_vCD || 0)) continue;
+      for (const v of yb_VINES) {
+        if (v.ay > cam.y + H || v.ay + v.L < cam.y - 50) continue;
+        const tp = yb_tip(v, G.t);
+        const hand = [r.p.hL, r.p.hR, r.p.head].find(p => Math.hypot(p.x - tp.x, p.y - tp.y) < 34);
+        if (hand) { r.yb_vine = v; r.yb_hand = hand === r.p.hR ? 'hR' : 'hL'; r.yb_hold = 0; pop('GRAB!', tp.x, tp.y - 30, '#9be05a', 16); sfx.squeak(); break; }
+      }
+    }
+    // monkeys slow you down until you shake them off
+    for (const r of yb_players()) if (r.yb_monkey) {
+      if (r.touch) for (const p of r.list) { const v = vel(p); if (Math.abs(v.x) > 160) setVel(p, v.x * .88, v.y); }
+      if (isCpu(r.team) && Math.random() < dt * 1.3) attack(r, 1);
+    }
+    if ((S.monkeyT -= dt) <= 0) {
+      S.monkeyT = rand(4, 6.5) / (1 + G.heat * .3);
+      if (items.filter(i => i.kind === 'yb_monkey').length < 3) {
+        const v = yb_VINES.filter(o => o.ay > cam.y - 40 && o.ay < cam.y + H * .4), x = v.length ? pick(v).ax : rand(120, 840);
+        const it = spawnItem('yb_monkey', x, cam.y - 20, rand(-60, 60), 60, null); it.timer = .5;
+        pop('OOK!', x, cam.y + 40, '#c4884f', 18); sfx.chitter();
+      }
+    }
+  },
+  yb_pin() {
+    // hang on by one hand; the rest of you dangles
+    for (const r of rags) {
+      const v = r.yb_vine; if (!v) continue;
+      if (r.lost || r.kin) { r.yb_vine = null; continue; }
+      const tp = yb_tip(v, G.st), h = r.p[r.yb_hand];
+      h.x = tp.x; h.y = tp.y; h.px = h.x - tp.vx * SDT; h.py = h.y - tp.vy * SDT;
+    }
+  },
+  yb_jump(r, jump0) {
+    if (r.yb_vine) { yb_letGo(r, true); return true; }
+    const did = yb_jumped(r, jump0);
+    if (did && r.yb_monkey) { for (const p of r.list) { const v = vel(p); setVel(p, v.x, v.y * .75); } yb_shakeMonkey(r, 1); }
+    return true;
+  },
+  yb_press(t, a, lv) { if (a === 'jumpOrSlam' && lv.some(r => r.yb_vine)) { lv.forEach(jump); return true; } return false; },
+  punchAt(r) { yb_shakeMonkey(r, 2); },
+  cpu(r) {
+    // jump into a vine that swings close by
+    if (!r.touch || r.yb_monkey) return null;
+    const px = r.p.pelvis.x, py = r.p.pelvis.y;
+    for (const v of yb_VINES) {
+      const tp = yb_tip(v, G.t);
+      if (tp.y < py - 40 && tp.y > py - 190 && Math.abs(tp.x - px) < 90 && Math.random() < .5) return { x: tp.x, y: tp.y, jump: true };
+    }
+    return null;
+  },
+  draw(layer) {
+    if (layer !== 'back') return;
+    const cam = G.cam;
+    for (const v of yb_VINES) {
+      if (v.ay > cam.y + H + 40 || v.ay + v.L < cam.y - 60) continue;
+      const tp = yb_tip(v, G.t), mx = (v.ax + tp.x) / 2 + (tp.y - v.ay) * .08 * Math.sin(G.t * 2 + v.ph), my = (v.ay + tp.y) / 2;
+      ctx.lineCap = 'round';
+      for (const [w, c] of [[9, INK], [5, '#3e9a3a']]) { ctx.strokeStyle = c; ctx.lineWidth = w; ctx.beginPath(); ctx.moveTo(v.ax, v.ay); ctx.quadraticCurveTo(mx, my, tp.x, tp.y); ctx.stroke(); }
+      for (let k = .25; k < 1; k += .25) {
+        const x = (1 - k) * (1 - k) * v.ax + 2 * k * (1 - k) * mx + k * k * tp.x, y = (1 - k) * (1 - k) * v.ay + 2 * k * (1 - k) * my + k * k * tp.y;
+        ctx.fillStyle = INK; ctx.beginPath(); ctx.ellipse(x + 7, y, 8, 4.5, .5, 0, 7); ctx.fill(); ctx.fillStyle = '#7ad957'; ctx.beginPath(); ctx.ellipse(x + 7, y, 6, 3, .5, 0, 7); ctx.fill();
+      }
+      circle(tp.x, tp.y, 8, INK); circle(tp.x, tp.y, 5, '#9be05a');
+      for (const [dx, dy, s] of [[-16, -4, 14], [14, -6, 15], [0, -14, 15], [0, 4, 12]]) circle(v.ax + dx, v.ay + dy, s + 3, INK);
+      for (const [dx, dy, s] of [[-16, -4, 14], [14, -6, 15], [0, -14, 15], [0, 4, 12]]) circle(v.ax + dx, v.ay + dy, s, '#2f8a3a');
+    }
+  },
+});
+
+// ================= 12. Jack and the Snorestalk =================
+const yb_STALK = [];
+for (let i = 0, y = 425; y > -1600; i++, y -= 122) yb_STALK.push(i % 2 ? [492, 640, y] : [320, 468, y]);
+const yb_snoring = () => !G.yb_s || G.yb_s.st === 'snore';
+function yb_drawGiant(x, y, s, st) {
+  // a sleepy giant face (eyes shut while snoring)
+  ctx.save(); ctx.translate(x, y); ctx.scale(s, s);
+  circle(0, 0, 64, INK); circle(0, 0, 60, '#f2c9a0');
+  ctx.fillStyle = INK; ctx.beginPath(); ctx.arc(0, -18, 62, Math.PI * 1.05, Math.PI * 1.95); ctx.fill(); ctx.fillStyle = '#7a4d2a'; ctx.beginPath(); ctx.arc(0, -18, 58, Math.PI * 1.07, Math.PI * 1.93); ctx.fill();
+  circle(-56, 6, 12, INK); circle(56, 6, 12, INK); circle(-56, 6, 9, '#f2c9a0'); circle(56, 6, 9, '#f2c9a0');
+  ctx.strokeStyle = INK; ctx.lineWidth = 5; ctx.lineCap = 'round';
+  if (st === 'snore') {
+    for (const ex of [-22, 22]) { ctx.beginPath(); ctx.arc(ex, 0, 10, .2, Math.PI - .2); ctx.stroke(); }
+    const o = 8 + Math.sin(G.t * 3) * 5; circle(0, 30, o + 3, INK); circle(0, 30, o, '#8a2c3a');
+  } else {
+    const open = st === 'awake' ? 12 : 5;
+    for (const ex of [-22, 22]) { ctx.fillStyle = INK; ctx.beginPath(); ctx.ellipse(ex, 0, 13, open + 2, 0, 0, 7); ctx.fill(); ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.ellipse(ex, 0, 11, open, 0, 0, 7); ctx.fill(); circle(ex, 0, Math.min(open, 6), INK); }
+    if (st === 'awake') { ctx.beginPath(); ctx.moveTo(-36, -18); ctx.lineTo(-10, -10); ctx.moveTo(36, -18); ctx.lineTo(10, -10); ctx.stroke(); }
+    ctx.beginPath(); ctx.moveTo(-16, 34); ctx.lineTo(16, 34); ctx.stroke();
+  }
+  circle(0, 14, 9, INK); circle(0, 14, 6.5, '#e8a888');
+  ctx.restore();
+}
+MINIS.push({
+  id: 'yb_stalk', engine: 'climb', rank: 12, name: 'Jack and the Snorestalk', icon: 'yb_egg', rules: 'race', goal: 1, soloGoal: 1, time: 150, soloTime: 100,
+  howto: 'Climb while the giant snores. When he wakes up, FREEZE! Anyone moving gets flicked off.', blurb: 'Grab the golden egg without waking the giant. Shhh.',
+  sky: ['#7ec8ff', '#e6f6ff'], wallCol: '#5d8a3a', groundCol: '#5cbf4a',
+  ledges: yb_STALK, top: -1720, summitX1: 370, summitX2: 590, spawn: [[220, 420], [740, 420]],
+  setup() { G.yb_s = { st: 'snore', t: rand(4, 6), zz: 0 }; },
+  tick(dt) {
+    const S = G.yb_s, cam = G.cam;
+    S.t -= dt;
+    // smoothed sideways speed, so a floppy wobble doesn't count as moving
+    for (const r of yb_players()) r.yb_sx = (r.yb_sx || 0) * .85 + vel(r.p.pelvis).x * .15;
+    if (S.st === 'snore') {
+      if ((S.zz -= dt) <= 0) { S.zz = 1.7; sfx.tuba(); }
+      if (S.t <= 0) { S.st = 'stir'; S.t = 1; pop(pick(['SNORT?!', 'HRRMPH?', 'HUH?!']), 480, cam.y + 130, '#ffc928', 30); sfx.honk(true); for (const r of yb_players()) r.yb_greedy = Math.random() < .18; }
+    } else if (S.st === 'stir') {
+      if (S.t <= 0) { S.st = 'awake'; S.t = rand(1.7, 2.6); S.since = 0; pop(pick(['FEE FI FO FUM!', 'WHO IS THERE?!', 'I SEE YOU!']), 480, cam.y + 130, '#ff3b3b', 30); sfx.buzz(); }
+    } else {
+      S.since += dt;
+      if (S.since > .3) for (const r of yb_players()) {
+        if (((r.touch && Math.abs(r.yb_sx) > 140) || r.jumpCD > 0) && (r.yb_fT || 0) < G.t) {
+          r.yb_fT = G.t + 1.5;
+          const dir = Math.sign(r.p.pelvis.x - 480) || 1, k = massK(r);
+          pushBody(r, dir * 650 * k, -260 * k); r.dropT = G.t + .45;
+          pop(pick(['FLICK!', 'BOINK!', 'CAUGHT YOU!']), r.p.head.x, r.p.head.y - 40, '#ff3b3b', 26); sfx.slap(); shake(6); burst(r.p.neck.x, r.p.neck.y, 1);
+        }
+      }
+      if (S.t <= 0) { S.st = 'snore'; S.t = rand(3, 5.5) / (1 + G.heat * .25); S.zz = .4; pop('Zzz...', 480, cam.y + 130, '#cfe8ff', 26); }
+    }
+  },
+  cpu(r) {
+    // freeze (most of the time) when the giant stirs, stepping back from the edge first
+    if (yb_snoring() || r.yb_greedy) return null;
+    const L = yb_on(r), px = r.p.pelvis.x, py = r.p.pelvis.y;
+    if (G.yb_s.st === 'stir' && L && L.type !== 'ground') return { x: clamp(px, L.x1 + 35, L.x2 - 35), y: py + 80 };
+    return { x: px, y: py + 80 };
+  },
+  draw(layer) {
+    const cam = G.cam, S = G.yb_s, C = G.climb;
+    if (layer === 'back') {
+      // the beanstalk
+      const y0 = Math.max(C.top - 60, cam.y - 40), y1 = Math.min(520, cam.y + H + 40);
+      ctx.lineCap = 'round';
+      for (const [w, c] of [[30, INK], [24, '#3e9a3a'], [6, '#7ad957']]) {
+        ctx.strokeStyle = c; ctx.lineWidth = w; ctx.beginPath();
+        for (let y = y1; y >= y0; y -= 20) { const x = 480 + Math.sin(y / 90) * 14 - (w === 6 ? 6 : 0); y === y1 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); }
+        ctx.stroke();
+      }
+      // leaves under the ledges
+      for (const L of C.ledges) {
+        if (L.type === 'ground' || L.type === 'summit' || L.y1 < cam.y - 40 || L.y1 > cam.y + H + 40) continue;
+        const cx = (L.x1 + L.x2) / 2;
+        ctx.fillStyle = INK; ctx.beginPath(); ctx.ellipse(cx, L.y1 + 2, (L.x2 - L.x1) / 2 + 10, 17, 0, 0, 7); ctx.fill();
+        ctx.fillStyle = '#5ccf4a'; ctx.beginPath(); ctx.ellipse(cx, L.y1 + 2, (L.x2 - L.x1) / 2 + 6, 13, 0, 0, 7); ctx.fill();
+        ctx.strokeStyle = '#2f8a3a'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(L.x1 + 4, L.y1 + 2); ctx.lineTo(L.x2 - 4, L.y1 + 2); ctx.stroke();
+      }
+      // the giant snoozing in a cloud at the top, with the golden egg in a nest
+      if (C.top > cam.y - 300) {
+        drawCloud(640, C.top - 30, 1.5); drawCloud(170, C.top - 60, 1.1);
+        yb_drawGiant(800, C.top - 70, 1.1, S ? S.st : 'snore');
+        ctx.save(); ctx.translate(480, C.top - 26); drawSprite(ctx, 'yb_egg', 0, 44); ctx.restore();
+      }
+    } else if (layer === 'front' && S) {
+      // a little giant badge that always shows if he's asleep
+      const bx = 110, by = cam.y + 76;
+      yb_drawGiant(bx, by, .45, S.st);
+      if (S.st === 'snore') yb_text('Zzz', bx + 40, by - 28 - Math.sin(G.t * 2) * 4, 18, '#cfe8ff', 'left');
+      else if (S.st === 'stir') { if (Math.sin(G.t * 20) > 0) yb_text('FREEZE!', 480, cam.y + 200, 44, '#ffc928'); }
+      else yb_text('DON\'T MOVE!', 480, cam.y + 200, 40, '#ff3b3b');
+    }
+  },
+});
+
+// ================= 13. Wrong-Way Escalators =================
+const yb_BELT_X = [250, 520, 760, 520, 240, 470, 730, 560, 300, 220, 500, 750, 520];
+const yb_BELTS = yb_zigzag(420, -2000, 138, 230, yb_BELT_X).map((L, i, all) => {
+  const next = all[i + 1], toward = next ? Math.sign((next[0] + next[1]) / 2 - (L[0] + L[1]) / 2) || 1 : 1;
+  // most belts run away from the next ledge
+  return [L[0], L[1], L[2], { type: 'conveyor', vx: (i % 4 === 2 ? toward : -toward) * (150 + (i % 3) * 20) }];
+});
+const yb_LEVERS = [3, 7, 11].map(i => { const L = yb_BELTS[i]; return { i, x: i % 2 ? L[1] - 24 : L[0] + 24, y: L[2] }; });
+MINIS.push({
+  id: 'yb_belts', engine: 'climb', rank: 13, name: 'Wrong-Way Escalators', icon: 'yb_belt', rules: 'race', goal: 1, soloGoal: 1, time: 150, soloTime: 90,
+  howto: 'Every ledge is a conveyor belt. Run against them, or bump a lever to flip every belt at once!', blurb: 'An escalator tower where most belts run the wrong way.',
+  sky: ['#2a1f5a', '#ff4f9a'], wallCol: '#3a3550', groundCol: '#5a5f6e',
+  ledges: yb_BELTS, top: -2050, spawn: [[480, 420], [760, 420]],
+  setup() { G.yb_b = { cd: 0, flips: 0, flashT: -9 }; },
+  tick() {
+    const S = G.yb_b;
+    if (G.t < S.cd) return;
+    for (const lv of yb_LEVERS) {
+      if (lv.y < G.cam.y - 40 || lv.y > G.cam.y + H + 40) continue;
+      const who = yb_players().find(r => r.list.some(p => Math.abs(p.x - lv.x) < 18 + p.r && p.y > lv.y - 58 && p.y < lv.y));
+      if (!who) continue;
+      S.cd = G.t + 1.6; S.flips++; S.flashT = G.t;
+      for (const L of G.climb.ledges) if (L.type === 'conveyor') L.vx = -L.vx;
+      pop('FLIP!', lv.x, lv.y - 70, '#ff4f9a', 26); pop('EVERY BELT REVERSED!', 480, G.cam.y + 150, '#ffc928', 26); sfx.clang();
+      for (const r of yb_players()) r.yb_pull = false;
+      break;
+    }
+  },
+  cpu(r) {
+    // sometimes go and bump the lever on this ledge
+    const L = yb_on(r); if (!L) return null;
+    const lv = yb_LEVERS.find(o => Math.abs(o.y - L.y1) < 2);
+    if (lv && r.yb_lvL !== L) { r.yb_lvL = L; r.yb_pull = Math.random() < .5 && G.t > G.yb_b.cd; }
+    if (lv && r.yb_pull) return { x: lv.x, y: L.y1 + 40 };
+    return null;
+  },
+  draw(layer) {
+    if (layer !== 'back') return;
+    const S = G.yb_b;
+    for (const lv of yb_LEVERS) {
+      if (lv.y < G.cam.y - 80 || lv.y > G.cam.y + H + 40) continue;
+      const a = (S.flips % 2 ? .6 : -.6) * (lv.i % 2 ? -1 : 1), hx = lv.x + Math.sin(a) * 40, hy = lv.y - 8 - Math.cos(a) * 40;
+      ctx.fillStyle = INK; roundRect(lv.x - 14, lv.y - 18, 28, 14, 4); ctx.fill(); ctx.fillStyle = '#5a5f6e'; roundRect(lv.x - 11, lv.y - 15, 22, 9, 3); ctx.fill();
+      ctx.lineCap = 'round'; ctx.strokeStyle = INK; ctx.lineWidth = 7; ctx.beginPath(); ctx.moveTo(lv.x, lv.y - 10); ctx.lineTo(hx, hy); ctx.stroke();
+      ctx.strokeStyle = '#c9c7d6'; ctx.lineWidth = 3; ctx.stroke();
+      circle(hx, hy, 9, INK); circle(hx, hy, 6.5, '#ff4f9a');
+    }
+    if (G.t - S.flashT < .5) {
+      ctx.globalAlpha = .5 * (1 - (G.t - S.flashT) / .5);
+      for (const L of G.climb.ledges) if (L.type === 'conveyor') { ctx.fillStyle = '#ff4f9a'; ctx.fillRect(L.x1, L.y1 - 8, L.x2 - L.x1, 18); }
+      ctx.globalAlpha = 1;
+    }
+  },
+});
+
+// ================= 14. Toot Tower =================
+function yb_toot(r) {
+  r.yb_toots--; r.jumpCD = .25; yb_boost(r);
+  for (const p of r.list) { const v = vel(p); setVel(p, v.x * .8 + r.move * 150, -740); }
+  const q = r.p.pelvis;
+  for (let i = 0; i < 9; i++) fx.puffs.push({ x: q.x + rand(-8, 8), y: q.y + 14, vx: rand(-120, 120), vy: rand(60, 200), r: rand(5, 11), t: 0, life: rand(.5, .9), color: pick(['#9be05a', '#b9f07a', '#7ac24a']) });
+  pop(pick(['TOOT!', 'PFFT!', 'PARP!', 'BRAAP!']), q.x, q.y + 30, '#9be05a', 22); sfx.tuba();
+}
+MINIS.push({
+  id: 'yb_toot', engine: 'climb', rank: 14, name: 'Toot Tower', icon: 'yb_beans', rules: 'score', time: 60, soloTime: 60, goal: 90, soloGoal: 45, scoreLabel: 'm',
+  howto: 'Eat beans to store toots. Press jump in mid-air to TOOT and fly higher! Most metres climbed wins.', blurb: 'Eat beans, toot, fly. Every toot is an extra mid-air jump.',
+  sky: ['#ff9d5c', '#ffe29a'], wallCol: '#a0522d', groundCol: '#5cbf4a',
+  gen: { infinite: true, gapMin: 175, gapMax: 225, wMin: 110, wMax: 170, mix: { normal: 7, cloud: 1, ice: 1 } }, spawn: [[360, 420], [600, 420]],
+  setup() { G.yb_t = { beanY: 380, bank: [0, 0] }; for (const r of yb_players()) r.yb_toots = 2; },
+  tick() {
+    const S = G.yb_t, cam = G.cam;
+    for (const r of yb_players()) {
+      if (r.yb_toots == null) r.yb_toots = 2;
+      // score the metres you climb yourself (coming back in higher up after a fall doesn't count)
+      const h = climbHeight(r.p.pelvis.y);
+      if (r.yb_base == null) { if (r.touch) r.yb_base = r.yb_top = h; }
+      else r.yb_top = Math.max(r.yb_top, h);
+      G.rscore[r.team] = S.bank[r.team] + (r.yb_base == null ? 0 : r.yb_top - r.yb_base);
+      // computer climbers toot near the top of a jump when a ledge is just out of reach, or to save themselves
+      if (isCpu(r.team) && !r.touch && r.yb_toots > 0 && r.jumpCD <= 0) {
+        const q = r.p.pelvis, v = vel(q);
+        const above = G.climb.ledges.some(L => !L.off && L.y1 < q.y - 10 && L.y1 > q.y - 230 && q.x > L.x1 - 50 && q.x < L.x2 + 50);
+        const below = G.climb.ledges.some(L => !L.off && L.y1 > q.y && L.y1 < q.y + 260 && q.x > L.x1 - 20 && q.x < L.x2 + 20);
+        if ((v.y > -60 && above && Math.random() < .3) || (v.y > 350 && !below && Math.random() < .2)) yb_toot(r);
+      }
+    }
+    // beans float all the way up the tower
+    while (S.beanY > cam.y - 260) {
+      S.beanY -= rand(90, 150);
+      const x = rand(90, 870), it = spawnItem('yb_beans', x, S.beanY, 0, 0, null);
+      it.p.kin = true; it.yb_x = x; it.yb_y = S.beanY;
+    }
+  },
+  yb_jump(r, jump0) {
+    if (!r.touch && G.t - (r.wallT || -9) >= .2 && r.jumpCD <= 0 && (r.yb_toots || 0) > 0 && !r.lost) { yb_toot(r); return true; }
+    return jump0(r);
+  },
+  yb_press(t, a, lv) { if (a === 'jumpOrSlam' && lv.some(r => !r.touch && r.yb_toots > 0)) { lv.forEach(jump); return true; } return false; },
+  onOut(r) { if (r.yb_base != null) G.yb_t.bank[r.team] += r.yb_top - r.yb_base; r.yb_base = null; },
+  draw(layer) {
+    if (layer !== 'front') return;
+    // how many toots everyone has left
+    for (const r of yb_players()) {
+      const n = r.yb_toots || 0, h = r.p.head;
+      for (let i = 0; i < n; i++) { ctx.save(); ctx.translate(h.x + (i - (n - 1) / 2) * 13, h.y - 38); drawSprite(ctx, 'yb_beans', 0, 14); ctx.restore(); }
+    }
+  },
+});
+
+// ================= 15. Gem Mine =================
+function yb_gemTick(it) {
+  const p = it.p;
+  if (p.kin) {
+    if (it.yb_L && it.yb_L.off) { p.kin = false; setVel(p, rand(-40, 40), 0); }
+    else { p.y = it.yb_y + Math.sin(G.t * 4 + it.yb_y) * 3; p.py = p.y; p.px = p.x; it.ang = Math.sin(G.t * 2 + p.x) * .15; }
+  } else it.ang += .1;
+  const r = it.age > .2 && yb_near(it, 4);
+  if (r && G.phase === 'live') {
+    const n = it.kind === 'yb_biggem' ? 3 : 1;
+    miniPoint(r.team, n, p.x, p.y - 20); sfx.ding(); puffs(p.x, p.y, 8, n > 1 ? '#c58bff' : '#ff7a8a'); removeItem(it, false); return false;
+  }
+  if (p.y > G.cam.y + H + 40) removeItem(it, false);
+  return false;
+}
+const yb_railY = k => 230 - k * 560;
+MINIS.push({
+  id: 'yb_gems', engine: 'climb', rank: 15, name: 'Gem Mine', icon: 'yb_gem', rules: 'score', time: 60, soloTime: 60, goal: 30, soloGoal: 15, scoreLabel: 'gems',
+  howto: 'Grab gems on the way up, but their ledges crumble a second after you land. Dodge the mine cart!', blurb: 'Climb out of a gem mine, grabbing jewels off crumbly ledges.',
+  sky: ['#2a2238', '#6a4a3a'], wallCol: '#5a4e48', groundCol: '#7a5a3a',
+  gen: { infinite: true, gapMin: 100, gapMax: 135, wMin: 130, wMax: 220, mix: { normal: 5, crumble: 4, sticky: .5 } }, spawn: [[360, 420], [600, 420]],
+  setup() {
+    const S = G.yb_g = { n: 0, cart: { on: false, wait: 3.5, warn: 0, x0: 0, t0: 0, dir: 1, y: 0 } };
+    addMover({ r: 20, kick: 280, bounce: .3,
+      at(t, m) {
+        const c = S.cart; m.on = c.on;
+        const x = c.x0 + c.dir * 400 * (t - c.t0);
+        m.x1 = x - 30; m.x2 = x + 30; m.y1 = m.y2 = c.y - 24;
+      },
+      hit(b) { const k = massK(b); pushBody(b, S.cart.dir * 560 * k, -420 * k); pop(pick(['CLANG!', 'RUN OVER!', 'CHOO CHOO!']), b.p.head.x, b.p.head.y - 40, '#ffc928', 22); sfx.clang(); shake(5); },
+    });
+  },
+  tick(dt) {
+    const S = G.yb_g, C = G.climb, cam = G.cam, c = S.cart;
+    // every new crumbly ledge gets a gem (and crumbles a bit slower)
+    for (; S.n < C.ledges.length; S.n++) {
+      const L = C.ledges[S.n];
+      if (L.type !== 'crumble' && !(L.type === 'normal' && Math.random() < .2)) continue;
+      if (L.type === 'crumble') L.o.delay = 1;
+      const big = Math.random() < .15, x = (L.x1 + L.x2) / 2 + rand(-20, 20), y = L.y1 - (big ? 26 : 22);
+      const it = spawnItem(big ? 'yb_biggem' : 'yb_gem', x, y, 0, 0, null); it.p.kin = true; it.yb_y = y; it.yb_L = L;
+    }
+    // the mine cart rattles across one of the rails on screen
+    if (c.on) { const x = c.x0 + c.dir * 400 * (G.t - c.t0); if (x < -120 || x > W + 120) { c.on = false; c.wait = rand(3.5, 6) / (1 + G.heat * .3); } }
+    else if (c.warn > 0) { c.warn -= dt; if (c.warn <= 0) { c.on = true; c.x0 = c.dir > 0 ? -60 : W + 60; c.t0 = G.t; sfx.honk(false); } }
+    else if ((c.wait -= dt) <= 0) {
+      const ks = []; for (let k = 0; k < 400; k++) { const y = yb_railY(k); if (y < cam.y + 120) break; if (y < cam.y + H - 70) ks.push(y); }
+      if (ks.length) { c.y = pick(ks); c.dir = Math.random() < .5 ? -1 : 1; c.warn = 1.1; } else c.wait = .5;
+    }
+  },
+  draw(layer) {
+    const S = G.yb_g, cam = G.cam, c = S && S.cart; if (!c) return;
+    if (layer === 'back') {
+      // rails across the shaft
+      for (let k = 0; k < 400; k++) {
+        const y = yb_railY(k); if (y < cam.y - 40) break; if (y > cam.y + H + 40) continue;
+        ctx.fillStyle = INK; for (let x = 40; x < 926; x += 26) ctx.fillRect(x - 1, y - 4, 10, 12);
+        ctx.fillStyle = '#8a5a32'; for (let x = 40; x < 926; x += 26) ctx.fillRect(x, y - 3, 8, 10);
+        ctx.fillStyle = INK; ctx.fillRect(34, y - 7, 892, 7); ctx.fillStyle = '#c9d2e4'; ctx.fillRect(34, y - 6, 892, 3);
+      }
+      // a few gems stuck in the walls
+      for (let y = Math.floor((cam.y - 40) / 90) * 90; y < cam.y + H + 40; y += 90) { const side = (y / 90) % 2 ? 2 : 940, k = Math.abs(y * 7) % 3; ctx.save(); ctx.translate(side + (side < 100 ? 14 : -14), y); drawSprite(ctx, k ? 'yb_gem' : 'yb_biggem', 0, 14); ctx.restore(); }
+    } else if (layer === 'front') {
+      if (c.warn > 0 && Math.sin(G.t * 20) > 0) { const x = c.dir > 0 ? 70 : W - 70; yb_text('!', x, c.y - 40, 40, '#ff3b3b'); yb_text(c.dir > 0 ? '→' : '←', x + c.dir * 34, c.y - 40, 30, '#ffc928'); }
+      if (c.on) {
+        const x = c.x0 + c.dir * 400 * (G.t - c.t0), y = c.y;
+        ctx.fillStyle = INK; roundRect(x - 40, y - 52, 80, 44, 6); ctx.fill(); ctx.fillStyle = '#6b7280'; roundRect(x - 36, y - 48, 72, 36, 4); ctx.fill();
+        ctx.fillStyle = '#4a4f5e'; ctx.fillRect(x - 36, y - 34, 72, 4);
+        for (const [dx, k] of [[-18, 'yb_gem'], [4, 'yb_biggem'], [20, 'yb_gem']]) { ctx.save(); ctx.translate(x + dx, y - 54); drawSprite(ctx, k, 0, 16); ctx.restore(); }
+        for (const dx of [-24, 24]) { circle(x + dx, y - 6, 9, INK); circle(x + dx, y - 6, 6, '#9aa0b0'); circle(x + dx, y - 6, 2, INK); }
+      }
+    }
+  },
+});
+
+// ================= 16. Lightning Ladders =================
+const yb_FLOOR = 290;
+function yb_addFloor(S) {
+  const C = G.climb, k = ++S.k, y = 520 - yb_FLOOR * k, yb = y + yb_FLOOR;
+  addLedge(60, 900, y, { type: 'normal' });
+  const xs = [190, 480, 770].map(x => x + rand(-50, 50));
+  let metal = xs.map(() => Math.random() < .6);
+  if (metal.every(Boolean)) metal[(Math.random() * 3) | 0] = false;
+  if (!metal.some(Boolean)) metal[(Math.random() * 3) | 0] = true;
+  xs.forEach((x, i) => C.ladders.push({ x, y1: yb, y2: y - 50, yb_metal: metal[i] }));
+  S.topY = y;
+}
+// which ladder (if any) a fighter is on or next to
+const yb_ladderAt = (r, l) => Math.abs(r.p.pelvis.x - l.x) < 36 && r.p.pelvis.y > l.y2 - 40 && r.p.pelvis.y < l.y1 + 10;
+MINIS.push({
+  id: 'yb_lightning', engine: 'climb', rank: 16, name: 'Lightning Ladders', icon: 'yb_ladder', rules: 'survive', noPunch: true, soloTime: 45, maxTime: 120, heatTime: 60,
+  howto: 'Hold up to climb the ladders. Lightning hits the METAL ones: get off when the cloud crackles!', blurb: 'Storm clouds zap the metal ladders. Jump to the wooden ones in time.',
+  sky: ['#2b3350', '#6c7a9a'], wallCol: '#4a4f5e', groundCol: '#5a6a3a',
+  gen: { infinite: true }, ledges: [], scroll: 20, spawn: [[330, 420], [630, 420]],
+  setup() {
+    const S = G.yb_l = { k: 0, topY: 520, strikeT: 2.5, warn: null, bolt: null };
+    G.climb.genY = -1e12;   // this tower builds itself, floor by floor
+    while (S.topY > G.cam.y - 700) yb_addFloor(S);
+  },
+  tick(dt) {
+    const S = G.yb_l, C = G.climb, cam = G.cam;
+    while (S.topY > cam.y - 700) yb_addFloor(S);
+    if (C.ladders.length > 30) C.ladders = C.ladders.filter(l => l.y2 < cam.y + H + 500);
+    if (S.bolt && (S.bolt.t -= dt) <= 0) S.bolt = null;
+    if (S.warn) {
+      if ((S.warn.t -= dt) <= 0) {
+        const l = S.warn.l; S.warn = null; S.bolt = { l, t: .35 };
+        sfx.zap(); shake(8); flashT = .08;
+        for (const r of rags) if (!r.lost && !r.kin && yb_ladderAt(r, l)) {
+          r.yb_zapT = G.t + .9; r.dropT = G.t + .5;
+          for (const p of r.list) setVel(p, rand(-80, 80), 420);
+          pop(pick(['ZAP!', 'BZZZT!', 'ZZZAP!']), r.p.head.x, r.p.head.y - 40, '#fff36b', 28);
+        }
+      }
+    } else if ((S.strikeT -= dt) <= 0) {
+      S.strikeT = rand(2.2, 3.4) / (1 + G.heat * .35);
+      const ok = C.ladders.filter(l => l.yb_metal && l.y2 < cam.y + H - 60 && l.y1 > cam.y + 80);
+      if (ok.length) {
+        const busy = ok.filter(l => rags.some(r => !r.lost && yb_ladderAt(r, l)));
+        S.warn = { l: busy.length && Math.random() < .7 ? pick(busy) : pick(ok), t: 1.3 };
+        sfx.fuse && sfx.fuse();
+      }
+    }
+  },
+  yb_jump(r, jump0) {
+    // the storm keeps jumps short: you need the ladders
+    if (yb_jumped(r, jump0)) for (const p of r.list) { const v = vel(p); if (v.y < -600) setVel(p, v.x, -600); }
+    return true;
+  },
+  cpu(r) {
+    const S = G.yb_l, C = G.climb, px = r.p.pelvis.x, py = r.p.pelvis.y, bad = S.warn && S.warn.l;
+    let best = null, bs = 1e9;
+    for (const l of C.ladders) {
+      if (l === bad || py > l.y1 + 10 || py < l.y2 + 30) continue;
+      const s = Math.abs(l.x - px) + (l.yb_metal ? 160 : 0);
+      if (s < bs) { bs = s; best = l; }
+    }
+    // the cloud is crackling over this ladder: let go and get away from it
+    if (bad && yb_ladderAt(r, bad)) return { x: bad.x + (best ? Math.sign(best.x - bad.x) || 1 : 1) * 140, y: py + 60 };
+    return best ? { x: best.x, y: best.y2, ladder: true } : null;
+  },
+  draw(layer) {
+    const S = G.yb_l, C = G.climb, cam = G.cam; if (!S) return;
+    if (layer === 'back') {
+      // repaint the metal ladders steel grey
+      for (const l of C.ladders) {
+        if (!l.yb_metal || l.y2 > cam.y + H + 40 || l.y1 < cam.y - 40) continue;
+        ctx.strokeStyle = INK; ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(l.x - 14, l.y1); ctx.lineTo(l.x - 14, l.y2); ctx.moveTo(l.x + 14, l.y1); ctx.lineTo(l.x + 14, l.y2); ctx.stroke();
+        ctx.strokeStyle = '#c9d2e4'; ctx.lineWidth = 3; ctx.stroke();
+        for (let y = l.y2 + 10; y < l.y1; y += 22) { ctx.strokeStyle = INK; ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(l.x - 14, y); ctx.lineTo(l.x + 14, y); ctx.stroke(); ctx.strokeStyle = '#a9b2c4'; ctx.lineWidth = 2.5; ctx.stroke(); }
+      }
+    } else if (layer === 'front') {
+      // rain
+      ctx.strokeStyle = 'rgba(200,220,255,.35)'; ctx.lineWidth = 2; ctx.beginPath();
+      for (let i = 0; i < 40; i++) { const x = (i * 97 + G.t * 90) % W, y = cam.y + ((i * 53 + G.t * 700) % (H + 40)) - 20; ctx.moveTo(x, y); ctx.lineTo(x - 6, y + 18); }
+      ctx.stroke();
+      if (S.warn) {
+        const l = S.warn.l, x = l.x, y = Math.max(l.y2 - 50, cam.y + 40);
+        drawCloud(x - 40, y, .8);
+        ctx.fillStyle = 'rgba(70,76,100,.6)'; for (const [dx, dy, s] of [[-30, 0, 20], [0, -10, 24], [30, 0, 20]]) circle(x + dx, y + dy, s, 'rgba(70,76,100,.75)');
+        if (Math.random() < .6) { ctx.strokeStyle = '#fff36b'; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.moveTo(x + rand(-30, 30), y + 10); ctx.lineTo(x + rand(-20, 20), y + 30); ctx.lineTo(x + rand(-30, 30), y + 44); ctx.stroke(); }
+        if (Math.sin(G.t * 24) > 0) yb_text('!', x, l.y2 + 10, 34, '#fff36b');
+      }
+      if (S.bolt) {
+        const l = S.bolt.l, top = Math.max(l.y2 - 50, cam.y + 40);
+        for (const [w, c] of [[12, INK], [6, '#fff36b'], [2, '#ffffff']]) {
+          ctx.strokeStyle = c; ctx.lineWidth = w; ctx.beginPath(); ctx.moveTo(l.x, top);
+          for (let y = top + 40, i = 0; y < l.y1; y += 40, i++) ctx.lineTo(l.x + (i % 2 ? 16 : -16), y);
+          ctx.lineTo(l.x, l.y1); ctx.stroke();
+        }
+      }
+      // zapped climbers light up like an x-ray
+      for (const r of rags) if (!r.lost && (r.yb_zapT || 0) > G.t && Math.sin(G.t * 40) > -.3) {
+        ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 4; ctx.lineCap = 'round';
+        for (const [a, b] of STICKS) { if (a === 'head' && b === 'pelvis') continue; ctx.beginPath(); ctx.moveTo(r.p[a].x, r.p[a].y); ctx.lineTo(r.p[b].x, r.p[b].y); ctx.stroke(); }
+        circle(r.p.head.x, r.p.head.y, r.p.head.r * .8, '#ffffff'); circle(r.p.head.x - 4, r.p.head.y - 2, 2.5, INK); circle(r.p.head.x + 4, r.p.head.y - 2, 2.5, INK);
+      }
+    }
+  },
+});
+
+// ================= 17. Summit Sumo =================
+const yb_SUMO = [[290, 670, 465], [305, 405, 365], [555, 655, 365], [350, 440, 262], [520, 610, 262]];
+MINIS.push({
+  id: 'yb_sumo', engine: 'climb', rank: 17, name: 'Summit Sumo', icon: 'yb_peak', rules: 'score', vs: true, goal: 12, time: 60, punchK: 1.5, scoreLabel: 'pts',
+  howto: 'Stand alone on the tiny summit to score. Shove them off! The trampolines boing you back up.', blurb: 'A tiny flat summit, trampolines all around the bottom, and lots of shoving.',
+  sky: ['#ff9d5c', '#ffe29a'], wallCol: '#a0724a', groundCol: '#5cbf4a',
+  ledges: yb_SUMO, top: 152, summitX1: 420, summitX2: 540,
+  beds: [[42, 288, 472, { color: '#e53935' }], [672, 918, 472, { color: '#2f6fe0' }]], spawn: [[160, 300], [800, 300]],
+  setup() { G.yb_k = { t: [0, 0], king: null }; },
+  tick(dt) {
+    const S = G.yb_k, C = G.climb;
+    // trampolines fling you back toward the summit
+    for (const r of rags) {
+      if (r.lost || r.kin || (r.yb_bCD || 0) > G.t || !r.list.some(p => p.bedT < 3)) continue;
+      r.yb_bCD = G.t + .7;
+      const x = r.p.pelvis.x, vx = clamp((480 - x) * .85, -380, 380) + rand(-30, 30);
+      for (const p of r.list) setVel(p, vx, -980 - rand(0, 90));
+      yb_boost(r);
+      pop(pick(['BOING!', 'REVENGE!', 'SPROING!']), x, r.p.pelvis.y - 40, '#ffffff', 22); sfx.boing(1);
+    }
+    const on = G.teams.filter(t => TEAMS[t].active.some(r => !r.lost && r.list.some(p => p.onSeg === C.summit && p.supT < 4)));
+    S.king = on.length === 1 ? on[0] : null;
+    if (S.king != null && G.phase === 'live') {
+      S.t[S.king] += dt;
+      if (S.t[S.king] >= 1) { S.t[S.king] -= 1; miniPoint(S.king, 1, 480, C.top - 120); }
+    }
+  },
+  cpu(r) {
+    const py = r.p.pelvis.y;
+    if (py < 250) return { x: 480 + Math.sin(G.t * 1.3 + r.team * 2) * 22, y: G.climb.top };
+    return null;
+  },
+  draw(layer) {
+    const C = G.climb, S = G.yb_k;
+    if (layer === 'back') {
+      // the mountain, drawn behind its ledges
+      ctx.fillStyle = INK; ctx.beginPath(); ctx.moveTo(276, 530); ctx.lineTo(408, 150); ctx.lineTo(552, 150); ctx.lineTo(684, 530); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#c9a37a'; ctx.beginPath(); ctx.moveTo(284, 530); ctx.lineTo(412, 156); ctx.lineTo(548, 156); ctx.lineTo(676, 530); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.moveTo(412, 156); ctx.lineTo(548, 156); ctx.lineTo(575, 232); ctx.lineTo(540, 214); ctx.lineTo(505, 236); ctx.lineTo(470, 210); ctx.lineTo(430, 232); ctx.lineTo(386, 228); ctx.closePath(); ctx.fill();
+      for (const L of C.ledges) if (L.type !== 'ground') drawLedge(L);
+      yb_text('KING OF THE HILL', 480, 214, 17, S && S.king != null ? tc(S.king) : '#ffc928');
+    } else if (layer === 'front' && S && S.king != null) {
+      const r = TEAMS[S.king].active.find(o => !o.lost);
+      if (r) { ctx.save(); ctx.translate(r.p.head.x, r.p.head.y - 40 + Math.sin(G.t * 6) * 3); drawSprite(ctx, 'crown', 0, 30); ctx.restore(); }
+    }
+  },
+});
+
+// ================= 18. Banana Peel Brawl =================
+function yb_throwPeel(r, dir) {
+  if ((r.yb_thCD || 0) > G.t || r.lost || r.kin || G.phase !== 'live') return;
+  r.yb_thCD = G.t + .7; if (dir) r.face = dir;
+  const it = spawnItem('yb_peel', r.p.neck.x + r.face * 16, r.p.neck.y - 12, r.face * rand(250, 330) + vel(r.p.pelvis).x * .4, -260, null);
+  it.yb_by = r; r.punchT = .2; sfx.whoosh();
+}
+MINIS.push({
+  id: 'yb_peels', engine: 'climb', rank: 18, name: 'Banana Peel Brawl', icon: 'yb_peel', rules: 'brawl', vs: true, maxTime: 100, heatTime: 50,
+  howto: 'Punch to throw banana peels. Step on one and you slide right off! Fall off the bottom and you are out.', blurb: 'Throw banana peels down at the climbers below you.',
+  sky: ['#3f9a5a', '#ffe29a'], wallCol: '#6b4a2a', groundCol: '#4cbb47',
+  gen: { infinite: true, wMin: 170, wMax: 300, mix: { normal: 6, sticky: 1 } }, scroll: 26, spawn: [[330, 420], [630, 420]],
+  setup() { for (const r of yb_players()) { r.yb_thCD = 0; r.yb_cpuTh = G.t + 2; } },
+  tick() {
+    for (const r of yb_players()) {
+      if (!isCpu(r.team)) continue;
+      const e = nearestEnemy(r), q = r.p.pelvis;
+      // throw down at climbers below, and litter now and then
+      if (G.t > (r.yb_cpuTh || 0)) {
+        if (e && e.p.pelvis.y > q.y + 40 && Math.abs(e.p.pelvis.x - q.x) < 380) { yb_throwPeel(r, Math.sign(e.p.pelvis.x - q.x) || 1); r.yb_cpuTh = G.t + rand(1, 2); }
+        else if (Math.random() < .01) { yb_throwPeel(r, Math.random() < .5 ? -1 : 1); r.yb_cpuTh = G.t + rand(2, 3.5); }
+      }
+      // hop over peels in the way
+      if (r.touch && r.move && items.some(it => it.kind === 'yb_peel' && it.yb_set && Math.abs(it.p.y - r.p.fL.y) < 30 && (it.p.x - q.x) * r.move > 0 && Math.abs(it.p.x - q.x) < 70)) jump(r);
+    }
+  },
+  yb_press(t, a, lv) { if (a === 'punch') lv.forEach(r => yb_throwPeel(r)); return false; },
+  draw(layer) {
+    if (layer !== 'front') return;
+    for (const r of yb_players()) if ((r.yb_slipT || 0) > G.t) { ctx.save(); ctx.translate(r.p.pelvis.x, r.p.pelvis.y); ctx.rotate(G.t * 12); drawSprite(ctx, 'yb_peel', 0, 16); ctx.restore(); }
+  },
+});
+
+// ================= 19. Flip-Flop Blocks =================
+const yb_FLIP = [];
+(() => {
+  const xs = [300, 620, 380, 680, 300, 560, 760, 480, 240, 540, 760, 440, 240, 560, 700];
+  let c = 'b';
+  for (let i = 0, y = 410; y > -1880; i++, y -= 128) {
+    const cx = xs[i % xs.length];
+    if (i % 6 === 5) { yb_FLIP.push([cx - 90, cx + 90, y, { type: 'normal' }]); continue; }   // a plain resting ledge
+    yb_FLIP.push([cx - 85, cx + 85, y, { type: 'yb_flip', yb_c: c }]);
+    // after a rest, a pair so either colour gets you going again
+    if (i % 6 === 0 && i) { const ox = cx < 480 ? cx + 300 : cx - 300; yb_FLIP.push([ox - 70, ox + 70, y - 20, { type: 'yb_flip', yb_c: c === 'r' ? 'b' : 'r' }]); }
+    c = c === 'r' ? 'b' : 'r';
+  }
+})();
+const yb_FLIPCOL = { r: ['#ff4f6a', '#9e1b2e'], b: ['#3f8cff', '#1b3f9e'] };
+function yb_flipAll() {
+  const S = G.yb_f; if (!S) return;
+  S.solid = S.solid === 'r' ? 'b' : 'r'; S.flashT = G.t; S.n++;
+  for (const L of G.climb.ledges) if (L.o && L.o.yb_c) L.off = L.o.yb_c !== S.solid;
+  sfx.note(S.solid === 'r' ? 523 : 392);
+}
+MINIS.push({
+  id: 'yb_flip', engine: 'climb', rank: 19, name: 'Flip-Flop Blocks', icon: 'yb_flip', rules: 'race', goal: 1, soloGoal: 1, time: 150, soloTime: 100,
+  howto: 'Every jump (anyone\'s!) swaps which colour is solid. Jump from red to blue to red...', blurb: 'Red and blue ledges swap between solid and ghostly every time anyone jumps.',
+  sky: ['#1a1440', '#5a2f8a'], wallCol: '#3a3550', groundCol: '#ffffff',
+  ledges: yb_FLIP, top: -1950, spawn: [[480, 420], [700, 420]],
+  setup() { G.yb_f = { solid: 'b', flashT: -9, n: 0 }; yb_flipAll(); },
+  yb_jump(r, jump0) { if (yb_jumped(r, jump0)) yb_flipAll(); return true; },
+  cpu(r) {
+    // standing: aim for a ledge that will be solid after this jump; flying: steer onto one that is solid now
+    const S = G.yb_f, px = r.p.pelvis.x, py = r.p.pelvis.y, next = r.touch ? (S.solid === 'r' ? 'b' : 'r') : S.solid;
+    let best = null, bs = 1e9;
+    for (const L of G.climb.ledges) {
+      if (L.y1 > py + (r.touch ? -30 : 60) || L.y1 < py - 230 || L.type === 'ground') continue;
+      if (L.o.yb_c && L.o.yb_c !== next) continue;
+      const lx = clamp(px, L.x1 + 24, L.x2 - 24), s = Math.abs(lx - px) + (py - L.y1) * .5;
+      if (s < bs) { bs = s; best = { x: lx, y: L.y1 }; }
+    }
+    return best;
+  },
+  draw(layer) {
+    const S = G.yb_f, cam = G.cam; if (!S) return;
+    if (layer === 'back') {
+      const fl = clamp(1 - (G.t - S.flashT) / .25, 0, 1);
+      for (const L of G.climb.ledges) {
+        const c = L.o && L.o.yb_c; if (!c || L.y1 < cam.y - 30 || L.y1 > cam.y + H + 30) continue;
+        const [hi, lo] = yb_FLIPCOL[c], x1 = L.x1, w = L.x2 - L.x1, y = L.y1;
+        if (!L.off) {
+          ctx.fillStyle = INK; roundRect(x1 - 3, y - 9 - fl * 3, w + 6, 20, 6); ctx.fill();
+          ctx.fillStyle = hi; roundRect(x1, y - 6 - fl * 3, w, 14, 5); ctx.fill();
+          ctx.fillStyle = lo; for (let x = x1 + 14; x < x1 + w - 8; x += 28) ctx.fillRect(x, y - 3 - fl * 3, 10, 8);
+          if (fl > 0) { ctx.globalAlpha = fl * .6; ctx.fillStyle = '#ffffff'; roundRect(x1, y - 6, w, 14, 5); ctx.fill(); ctx.globalAlpha = 1; }
+        } else {
+          ctx.globalAlpha = .28; ctx.fillStyle = hi; roundRect(x1, y - 6, w, 14, 5); ctx.fill(); ctx.globalAlpha = 1;
+          ctx.save(); ctx.setLineDash([7, 6]); ctx.strokeStyle = hi; ctx.lineWidth = 2.5; roundRect(x1, y - 6, w, 14, 5); ctx.stroke(); ctx.restore();
+        }
+      }
+      if (cam.y > -200) { yb_text('JUMP = FLIP!', 480, 470, 22, '#ffc928'); }
+    } else if (layer === 'front') {
+      // which colour is solid right now
+      const [hi] = yb_FLIPCOL[S.solid], x = 110, y = cam.y + 66;
+      ctx.fillStyle = INK; roundRect(x - 52, y - 18, 104, 36, 10); ctx.fill(); ctx.fillStyle = hi; roundRect(x - 48, y - 14, 96, 28, 8); ctx.fill();
+      yb_text(S.solid === 'r' ? 'RED' : 'BLUE', x, y + 1, 18, '#ffffff');
+    }
+  },
+});
+
+// ================= 20. Key to the Top =================
+const yb_KEYL = yb_zigzag(420, -1800, 132, 200, [270, 560, 760, 520, 260, 470, 720, 560, 300, 210, 480, 740]);
+yb_KEYL.push([60, 170, -260], [800, 900, -720], [60, 170, -1180]);   // little hidey-holes by the walls
+function yb_keyPlace(it, L, msg) {
+  const K = G.yb_key; K.carrier = null;
+  const x = L ? clamp((L.x1 + L.x2) / 2 + rand(-30, 30), L.x1 + 14, L.x2 - 14) : 480, y = L ? L.y1 - 24 : G.cam.y + H * .5;
+  it.p.kin = true; it.p.x = it.p.px = x; it.p.y = it.p.py = y; it.yb_y = y; it.ang = 0;
+  if (msg) pop(msg, x, y - 30, '#ffd93b', 20);
+}
+function yb_keyDrop(dir, burstUp = true) {
+  const K = G.yb_key, it = K.it, c = K.carrier; if (!c) return;
+  K.carrier = null; K.grabT = G.t + .6;
+  it.p.kin = false; setVel(it.p, dir * rand(280, 420), burstUp ? -rand(450, 600) : 0);
+  pop(pick(['DROPPED IT!', 'KEY FLIES!', 'BUTTERFINGERS!']), c.p.head.x, c.p.head.y - 44, '#ffd93b', 22); sfx.clang();
+}
+function yb_keyTick(it) {
+  const K = G.yb_key, p = it.p; if (!K) return false;
+  const c = K.carrier;
+  if (c) {
+    if (c.lost || !rags.includes(c)) { yb_keyPlace(it, yb_lowLedge(), 'KEY!'); return false; }
+    p.x = c.p.hR.x; p.y = c.p.hR.y - 4; p.px = p.x; p.py = p.y; it.ang = .7 * c.face; it.flip = c.face;
+    return false;
+  }
+  if (p.kin) { p.y = it.yb_y + Math.sin(G.t * 3) * 4; p.py = p.y; p.px = p.x; it.ang = Math.sin(G.t * 2) * .2; }
+  else { it.ang += .25; if (p.y > G.cam.y + H + 20) { yb_keyPlace(it, yb_lowLedge(), 'THE KEY BOUNCES BACK!'); return false; } }
+  if (G.t > (K.grabT || 0) && G.phase !== 'roundEnd') {
+    const r = yb_near(it, 6);
+    if (r) { K.carrier = r; p.kin = true; pop(pick(['GOT THE KEY!', 'MINE!', 'KEY!']), r.p.head.x, r.p.head.y - 50, tc(r.team), 22); sfx.pickup(); }
+  }
+  return false;
+}
+MINIS.push({
+  id: 'yb_key', engine: 'climb', rank: 20, name: 'Key to the Top', icon: 'yb_key', rules: 'score', goal: 1, soloGoal: 1, time: 150, soloTime: 100, scoreLabel: 'keys',
+  howto: 'Find the key, carry it up to the door. Carrying means no wall jumps. Punch the carrier to knock it loose!', blurb: 'The summit door is locked, and the key is hidden somewhere in the tower.',
+  sky: ['#4a5a8a', '#c9d6ff'], wallCol: '#7a7a8a', groundCol: '#6a8a4a',
+  ledges: yb_KEYL, top: -1830, spawn: [[480, 420], [760, 420]],
+  setup() {
+    G.climb.summitBy = -1;   // the summit only counts with the key
+    const K = G.yb_key = { carrier: null, grabT: 0, open: false };
+    const spots = G.climb.ledges.filter(L => L.y1 < -420 && L.y1 > -1320 && L.type === 'normal');
+    K.it = spawnItem('yb_key', 480, 0, 0, 0, null);
+    yb_keyPlace(K.it, pick(spots));
+  },
+  tick() {
+    const K = G.yb_key, C = G.climb, c = K.carrier;
+    if (!K.it || K.it.dead) { K.it = spawnItem('yb_key', 480, 0, 0, 0, null); yb_keyPlace(K.it, yb_lowLedge(), 'KEY!'); }
+    if (c && !c.lost && G.phase === 'live' && c.list.some(p => p.onSeg === C.summit && p.supT < 3)) {
+      K.open = true; miniPoint(c.team, 1, 480, C.top - 140); pop('UNLOCKED!', 480, C.top - 180, '#ffd93b', 34); sfx.cheer();
+    }
+  },
+  yb_jump(r, jump0) {
+    if (r === G.yb_key.carrier) {
+      if (!r.touch) return true;   // no wall jumps with your hands full
+      if (yb_jumped(r, jump0)) for (const p of r.list) { const v = vel(p); if (v.y < -820) setVel(p, v.x, -820); }
+      return true;
+    }
+    return jump0(r);
+  },
+  punchAt(r, hx, hy) {
+    const c = G.yb_key.carrier; if (!c || c.team === r.team) return;
+    if (c.list.some(p => Math.hypot(p.x - hx, p.y - hy) - p.r < 26 * r.s + 16)) yb_keyDrop(r.face);
+  },
+  onOut(r) { const K = G.yb_key; if (K.carrier === r) yb_keyPlace(K.it, yb_lowLedge(), 'KEY!'); },
+  cpu(r) {
+    const K = G.yb_key, c = K.carrier, px = r.p.pelvis.x, py = r.p.pelvis.y;
+    if (c === r) return null;
+    if (c) return { x: c.p.pelvis.x, y: c.p.pelvis.y, punch: Math.hypot(c.p.pelvis.x - px, c.p.pelvis.y - py) < 90 };
+    const k = K.it.p;
+    if (k.y < py - 250) return null;   // climb up toward it
+    // below you: drop through ledges to get it
+    if (k.y > py + 60 && Math.abs(k.x - px) < 80 && r.touch) r.dropT = G.t + .3;
+    return { x: k.x, y: k.y };
+  },
+  draw(layer) {
+    const K = G.yb_key, C = G.climb, cam = G.cam; if (!K) return;
+    if (layer === 'back') {
+      // the locked door on the summit
+      if (C.top > cam.y - 200) {
+        const x = 480, y = C.top - 6;
+        ctx.fillStyle = INK; roundRect(x - 56, y - 132, 112, 132, 14); ctx.fill();
+        ctx.fillStyle = '#8a8a9a'; roundRect(x - 52, y - 128, 104, 128, 12); ctx.fill();
+        ctx.fillStyle = INK; roundRect(x - 36, y - 110, 72, 110, 30); ctx.fill();
+        if (K.open) { ctx.fillStyle = '#ffe9a8'; roundRect(x - 32, y - 106, 64, 106, 28); ctx.fill(); }
+        else {
+          ctx.fillStyle = '#7a4d2a'; roundRect(x - 32, y - 106, 64, 106, 28); ctx.fill();
+          ctx.strokeStyle = '#5a3418'; ctx.lineWidth = 3; for (const dx of [-12, 12]) { ctx.beginPath(); ctx.moveTo(x + dx, y - 100); ctx.lineTo(x + dx, y); ctx.stroke(); }
+          circle(x, y - 50, 13, INK); circle(x, y - 50, 10, '#ffc928'); ctx.fillStyle = INK; ctx.fillRect(x - 2.5, y - 54, 5, 12);
+        }
+      }
+      if (!K.carrier && K.it && K.it.p.kin) { ctx.globalAlpha = .35 + .2 * Math.sin(G.t * 5); circle(K.it.p.x, K.it.p.y, 26, '#ffd93b'); ctx.globalAlpha = 1; }
+    } else if (layer === 'front') {
+      const c = K.carrier;
+      if (c) yb_text('KEY!', c.p.head.x, c.p.head.y - 40, 16, tc(c.team));
+      else if (K.it && K.it.p.y < cam.y + 10) { const x = clamp(K.it.p.x, 90, W - 90), y = cam.y + 50; ctx.fillStyle = INK; tri(x - 14, y + 24, x, y, x + 14, y + 24); ctx.fillStyle = '#ffd93b'; tri(x - 10, y + 21, x, y + 5, x + 10, y + 21); yb_text('KEY UP HERE', x, y + 38, 14, '#ffd93b'); }
+    }
+  },
+});
+
+// keep each level's drawing from leaking line caps, dashes or alpha into the rest of the frame
+for (const m of MINIS) if (m.id && m.id.startsWith('yb_') && m.draw && !m.yb_wrapped) {
+  const d = m.draw; m.yb_wrapped = true;
+  m.draw = function (layer) { const c = ctx; c.save(); try { d.call(this, layer); } finally { c.restore(); } };
+}
 // <<EXTRA LEVELS>>
 MINIS.forEach((m, i) => { m.rank = m.rank || i + 1; });
 
