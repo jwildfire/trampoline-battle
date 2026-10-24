@@ -438,6 +438,7 @@ const POSE = {
   stand: { head: [0, -50], neck: [0, -32], pelvis: [0, 0], eL: [-11, -19], hL: [-18, -5], eR: [11, -19], hR: [18, -5], kL: [-6, 21], fL: [-9, 41], kR: [6, 21], fR: [9, 41] },
   air:   { head: [0, -50], neck: [0, -32], pelvis: [0, 0], eL: [-10.2, -45.6], hL: [-17.2, -59.6], eR: [10.2, -45.6], hR: [17.2, -59.6], kL: [-7.6, 20.5], fL: [-13.7, 39.7], kR: [7.6, 20.5], fR: [13.7, 39.7] },
   hang:  { head: [0, -50], neck: [0, -32], pelvis: [0, 0], eL: [-11, -45], hL: [-10, -61], eR: [11, -45], hR: [10, -61], kL: [-6, 21], fL: [-10, 41], kR: [6, 21], fR: [10, 41] },
+  crouch: { head: [0, -48], neck: [0, -30], pelvis: [0, 0], eL: [-12, -17], hL: [-14, -30], eR: [12, -17], hR: [14, -30], kL: [-19, 11], fL: [-8, 28], kR: [19, 11], fR: [8, 28] },
   sit:   { head: [2, -50], neck: [0, -32], pelvis: [0, 0], eL: [12, -24], hL: [26, -22], eR: [14, -22], hR: [28, -20], kL: [20, -5], fL: [24, 15], kR: [22, -3], fR: [26, 17] },
 };
 const RADII = { head: 12, neck: 6, pelvis: 7, eL: 4, hL: 4, eR: 4, hR: 4, kL: 5, fL: 5, kR: 5, fR: 5 };
@@ -798,7 +799,7 @@ function muscles(r) {
     A += p.m * (dx * qx + dy * qy); B += p.m * (qx * dy - qy * dx);
   }
   let th = Math.atan2(B, A);
-  if (!r.lost) th *= 1 - (r.pose === 'stand' ? PHYS.upright : PHYS.airUpright);
+  if (!r.lost) th *= 1 - (r.pose === 'stand' || r.pose === 'crouch' ? PHYS.upright : PHYS.airUpright);
   const c = Math.cos(th), sn = Math.sin(th);
   const soft = r.lost ? .25 : 1;
   let sx = 0, sy = 0;
@@ -898,15 +899,17 @@ function capsule(p, c, deadly) {
   const dx = p.x - cx, dy = p.y - cy, rr = p.r + c.r;
   const d2 = dx * dx + dy * dy;
   if (d2 >= rr * rr) return;
-  const d = Math.sqrt(d2) || .01, nx = dx / d, ny = dy / d;
+  const d = Math.sqrt(d2) || .01, nx = dx / d, ny = dy / d, ox = p.x, oy = p.y;
   p.x = cx + nx * rr; p.y = cy + ny * rr;
   if (ny < -.5) { p.supT = 0; p.onSeg = c; if (c.vx) p.x += c.vx * SDT; if (c.touchFn) c.touchFn(p); }
   if (c.wall && Math.abs(nx) > .7) { p.body.wallT = G.t; p.body.wallDir = Math.sign(nx); }
-  const vx = p.x - p.px, vy = p.y - p.py, vn = vx * nx + vy * ny;
+  // in the racing and climbing engines, pushing a part back out of a ledge mustn't turn into speed:
+  // it made standing fighters hop and twitch, and cars bounce
+  const firm = G.noFloor && !(G.mini && G.mini.freeSpin), vx = (firm ? ox : p.x) - p.px, vy = (firm ? oy : p.y) - p.py, vn = vx * nx + vy * ny;
   if (vn < 0) {
     const tx = vx - vn * nx, ty = vy - vn * ny, keep = c.slide ?? p.slide ?? .9, bounce = c.bounce ?? .35;
     p.px = p.x - (tx * keep - vn * nx * bounce); p.py = p.y - (ty * keep - vn * ny * bounce);
-  }
+  } else if (firm) { p.px = p.x - vx; p.py = p.y - vy; }
   if (deadly && p.body.type === 'rag') loseBody(p.body, 'wall');
 }
 
@@ -2982,18 +2985,33 @@ function racePre(dt) {
     }
     if (!dir && slide > .996) slide = .996;   // nobody on the gas: roll to a stop
     c.wA.slide = c.wB.slide = slide;
+    // cars fight hard to stay upright: always in the air, and on the ground as soon as they tip past the slope they're on
+    const gA = groundY(cx - 40), gB = groundY(cx + 40), slope = ground && gA != null && gB != null ? Math.atan2(gB - gA, 80) : 0;
+    let e = a - slope; e = Math.atan2(Math.sin(e), Math.cos(e));
+    const spin = (vel(c.bB).y - vel(c.bA).y) * Math.cos(a) - (vel(c.bB).x - vel(c.bA).x) * Math.sin(a);
     if (ground) {
       if (dir && (Math.sign(v.x) !== dir || Math.abs(v.x) < c.V.top * (dir < 0 ? .6 : 1))) for (const p of [c.wA, c.wB]) { p.ax += dir * acc * fx; p.ay += dir * acc * fy; }
-    } else {
-      // in the air, gas and brake tip the car, and it levels itself (with a little damping) so holding the gas isn't a death sentence
+      const over = Math.abs(e) - .3;
+      if (over > 0 && !G.mini.freeSpin) carTwist(c, a, Math.sign(e) * (1600 + 3200 * over) + spin * 4, 0);
+    } else if (G.mini.freeSpin) {
+      // levels about flipping (freeSpin) keep the old gentle levelling so you can still spin in the air
       const k = 600 * dir + 1100 * clamp(a, -1.2, 1.2) + (vel(c.bB).y - vel(c.bA).y) * 3;
       c.bB.ay -= k; c.bA.ay += k; c.wB.ay -= k * .5; c.wA.ay += k * .5;
+    } else {
+      // in the air, gas and brake tip the car a little, and it levels itself firmly so holding the gas isn't a death sentence
+      carTwist(c, a, 700 * dir + 2600 * e + spin * 6, .5);
     }
     if (c.boostT > 0) boost = Math.max(boost, 2600);
     if (boost) { for (const p of c.list) { p.ax += boost * fx; p.ay += boost * fy * .5; } if (Math.random() < .7) fx_flame(c); }
     if (c.slipT > 0) { c.bB.ay += Math.sin(G.t * 30) * 2500; }
     if (!live) for (const p of [c.wA, c.wB]) { const pv = vel(p); addVel(p, -pv.x * .1, 0); }
   }
+}
+// turn a car: pushes at right angles to it, so it rotates the right way even upside down (k > 0 lifts the nose)
+function carTwist(c, a, k, kw) {
+  const sx = Math.sin(a) * k, cy = Math.cos(a) * k;
+  c.bB.ax += sx; c.bB.ay -= cy; c.bA.ax -= sx; c.bA.ay += cy;
+  if (kw) { c.wB.ax += sx * kw; c.wB.ay -= cy * kw; c.wA.ax -= sx * kw; c.wA.ay += cy * kw; }
 }
 function fx_flame(c) {
   const a = carAng(c);
@@ -3024,7 +3042,16 @@ function racePost(dt) {
     if (r && r.seat) {
       const a = carAng(c), upside = Math.cos(a) < -.25;
       c.upT = upside && (c.bA.supT < 20 || c.bB.supT < 20 || r.p.head.supT < 20) ? c.upT + dt : 0;
-      if (c.upT > .45 || (r.p.head.supT < 3 && Math.cos(a) < .2)) ejectDriver(c);
+      // stuck on its roof? the car kicks itself back over, twice, before the driver gives up
+      if (c.upT > .2 && (c.flipT || 0) < G.t && (c.flips || 0) < 2) {
+        c.flipT = G.t + .7; c.flips = (c.flips || 0) + 1;
+        const d = Math.sin(a) >= 0 ? 420 : -420, sx = Math.sin(a) * d, cy = Math.cos(a) * d;
+        for (const p of c.list) addVel(p, 0, -560);
+        addVel(c.bB, sx, -cy); addVel(c.bA, -sx, cy);
+        pop(pick(['FLIP BACK!', 'NOPE!', 'HUP!']), carX(c), carY(c) - 70, '#ffffff', 18); sfx.boing(.7);
+      }
+      if (!upside && Math.cos(a) > .6) c.flips = 0;
+      if (c.upT > 1.4) ejectDriver(c);
       else if (live && !c.done && cx > T.finish) {
         c.done = true; G.place.push(c.team);
         pop(G.place.length === 1 ? 'FINISH!' : 'FINISHED!', T.finish, cy - 90, tc(c.team), 30); sfx.cheer();
@@ -3307,6 +3334,7 @@ ENG.race = {
 // ================= climbing engine =================
 // Tall towers of one-way ledges. The camera climbs with the leader (and sometimes on its own); fall off the bottom and you're out.
 // A climb level has engine: 'climb' and `ledges` ([x1, x2, y, { type }]) and/or `gen` for a generated tower. Up is negative y.
+const CLIMB_FLOAT = .35, CLIMB_AIR_UP = 760, CLIMB_AIR_MIN = 90;
 const LEDGE_TYPES = ['normal', 'ice', 'sticky', 'conveyor', 'move', 'crumble', 'spring', 'cloud'];
 function addLedge(x1, x2, y, o = {}) {
   const type = o.type || 'normal';
@@ -3361,6 +3389,16 @@ function climbBuild(def) {
   G.climbLava = def.lava ? 760 : null;
   G.cam = { x: 0, y: 0, z: 1 };
 }
+// feet just above a ledge and not heading up count as standing: otherwise the legs spread for the air pose, the fighter
+// drops onto the ledge, the legs snap back together for the standing pose and pop them off it again, over and over
+function climbNearGround(r) {
+  if (r.lost || vel(r.p.pelvis).y < -120) return false;
+  for (const f of [r.p.fL, r.p.fR]) {
+    const cell = statics.grid && statics.grid.get(Math.floor(f.y / 160));
+    if (cell) for (const L of cell) if (L.ground && !L.off && f.x > L.x1 - 4 && f.x < L.x2 + 4) { const gap = L.y1 - L.r - f.y - f.r; if (gap > -4 && gap < 12) return true; }
+  }
+  return false;
+}
 const climbHeight = y => Math.max(0, Math.round((520 - y) / 40));
 // drop something from above the top of the screen, with a warning arrow first
 function climbDrop(kind, x, delay = .8) { G.climb.warn.push({ kind, x: x ?? rand(80, 880), t: delay }); }
@@ -3374,6 +3412,15 @@ function climbPre(dt) {
   // ladders: hold up to climb
   for (const r of rags) {
     if (r.lost || r.kin) continue;
+    // fighters are floaty up here (items still fall at full speed), and landing gives back the air jumps
+    if (!r.seat) for (const p of r.list) addVel(p, 0, -G0 * grav * CLIMB_FLOAT * dt);
+    if (r.touch) r.airN = 0;
+    // holding down on a ledge: crouch, and after a moment drop through it
+    const down = r.team < 2 && !isCpu(r.team) && TEAMS[settings.mode !== '2p' ? 0 : r.team].held.down;
+    r.crouch = !!(down && r.touch);
+    if (r.crouch) { r.crouchT = (r.crouchT || 0) + dt; if (r.crouchT > .3 && r.list.some(p => p.onSeg && p.onSeg.oneway && p.supT < 40)) r.dropT = G.t + .35; } else r.crouchT = 0;
+    // standing on a ledge: soak up the little rebounds so fighters stand calmly instead of hopping and twitching
+    if (r.touch && r.jumpCD <= 0 && !r.seat && Math.abs(vel(r.p.pelvis).y) < 320) for (const p of r.list) { const pv = vel(p); setVel(p, pv.x, pv.y * .4); }
     const held = r.team < 2 && !isCpu(r.team) ? TEAMS[settings.mode !== '2p' ? 0 : r.team].held.up : r.wantUp;
     r.onLadder = false;
     for (const l of C.ladders) if (Math.abs(r.p.pelvis.x - l.x) < 22 && r.p.pelvis.y > l.y2 - 20 && r.p.pelvis.y < l.y1 + 30) {
@@ -3438,12 +3485,19 @@ function climbJump(r) {
       r.jumpCD = .22; const d = r.wallDir || 1;
       for (const p of r.list) setVel(p, d * 440, -780);
       r.face = d; pop('WALL JUMP!', r.p.head.x, r.p.head.y - 30, '#7fd6ff', 16); sfx.jump();
+    } else {
+      // jump again in mid-air as often as you like, turning to wherever you're steering; each one is weaker until you land
+      const n = r.airN || 0, up = Math.max(CLIMB_AIR_MIN, CLIMB_AIR_UP * Math.pow(.8, n));
+      r.airN = n + 1; r.jumpCD = .18;
+      for (const p of r.list) { const pv = vel(p); setVel(p, r.move ? r.move * Math.max(Math.abs(pv.x), 320) : pv.x * .7, Math.min(pv.y, 0) * .3 - up); }
+      if (n < 2) pop(n ? 'TRIPLE JUMP!' : 'DOUBLE JUMP!', r.p.head.x, r.p.head.y - 30, '#ffc928', 15);
+      sfx.jump();
     }
     return true;
   }
   // running fast makes you jump higher
   r.jumpCD = .26;
-  const sp = Math.abs(v.x), up = 700 + Math.min(430, sp * .75);
+  const sp = Math.abs(v.x), up = 880 + Math.min(380, sp * .7);
   for (const p of r.list) { const pv = vel(p); setVel(p, pv.x * 1.05, Math.min(pv.y, 0) * .3 - up); }
   if (sp > 380) { r.combo = (r.combo || 0) + 1; if (r.combo > 1) pop(`COMBO x${r.combo}!`, r.p.head.x, r.p.head.y - 34, '#ffc928', 16 + Math.min(r.combo, 8)); }
   else r.combo = 0;
@@ -3451,7 +3505,10 @@ function climbJump(r) {
   return true;
 }
 function climbPress(t, a, lv) {
-  if (a === 'down') { for (const r of lv) if (r.touch) { r.dropT = G.t + .35; } return false; }
+  // up is always a jump in a tower, even on the touch pad and in mid-air
+  if (a === 'jumpOrSlam') { lv.forEach(jump); return true; }
+  // down crouches on a ledge (keep holding it to drop through) and slams in the air
+  if (a === 'down') { for (const r of lv) if (r.touch) r.crouchT = 0; return false; }
   return false;
 }
 function climbAI(r, dt) {
@@ -3474,6 +3531,7 @@ function climbAI(r, dt) {
   r.wantUp = !!goal.ladder && Math.abs(dx) < 24;
   if (!r.wantUp && r.touch && (goal.jump || (goal.y != null && goal.y < py - 20 && Math.abs(dx) < 70 + Math.abs(vel(r.p.pelvis).x) * .3)) && Math.random() < .35) jump(r);
   if (!r.touch && G.t - (r.wallT || -9) < .1 && Math.random() < .3) jump(r);
+  else if (!r.touch && (r.airN || 0) < 3 && vel(r.p.pelvis).y > 120 && goal.y != null && goal.y < py && Math.random() < .2) jump(r);
   if (goal.punch || (!def.noPunch && (r.thinkT -= dt) <= 0)) { r.thinkT = rand(.3, .7); if (nearestEnemy(r, 70 * r.s + 40)) attack(r, 1); }
   return true;
 }
@@ -3570,7 +3628,7 @@ function climbHud() {
   if (C.summit) { ctx.fillStyle = '#ffc928'; tri(x - 2, y1 - 22, x + 14, y1 - 16, x - 2, y1 - 10); ctx.fillStyle = INK; ctx.fillRect(x - 3, y1 - 24, 2, 22); }
 }
 ENG.climb = {
-  speedK: 1.6, build: climbBuild, pre: climbPre, post: climbPost, spawn: climbSpawn, jump: climbJump, press: climbPress, ai: climbAI,
+  speedK: 1.6, airAcc: 1600, nearGround: climbNearGround, build: climbBuild, pre: climbPre, post: climbPost, spawn: climbSpawn, jump: climbJump, press: climbPress, ai: climbAI,
   backdrop: climbBackdrop, drawWorld: climbDraw, drawHud: climbHud,
 };
 
@@ -4088,9 +4146,11 @@ function frame(dt) {
     for (const p of r.list) p.ax = 0;
     if (r.kin) continue;
     r.punchT -= dt; r.punchCD -= dt; r.jumpCD -= dt; r.boingCD -= dt;
-    r.touch = r.list.some(p => p.bedT < 16 || p.supT < 16);
+    // on ledges (racing and climbing) a foot that just lifted still counts for a few frames, so the pose doesn't flicker
+    r.touch = r.list.some(p => p.bedT < 16 || p.supT < (G.noFloor ? 40 : 16));
     if (r.touch && r.slam && vel(r.p.pelvis).y < 200) r.slam = false;
-    r.pose = r.seat ? 'sit' : r.touch ? 'stand' : 'air';
+    if (!r.touch && mini && G.eng && G.eng.nearGround && G.eng.nearGround(r)) r.touch = true;
+    r.pose = r.seat ? 'sit' : r.touch ? (r.crouch ? 'crouch' : 'stand') : 'air';
     if (r.lost) { r.lostT += dt; continue; }
     if (r.blowT > 0) windTick(r, dt);
     if (r.kind === 'monkey' && playing() && (r.bananaT -= dt) <= 0) {
@@ -4118,7 +4178,7 @@ function frame(dt) {
     const v = vel(r.p.pelvis);
     r.walk = r.touch && Math.abs(v.x) > 50;
     if (r.move) {
-      const acc = r.touch ? 1700 : 600, cap = 300 * r.def.speed * (G.eng && G.eng.speedK || 1);
+      const acc = r.touch ? 1700 : (G.eng && G.eng.airAcc || 600), cap = 300 * r.def.speed * (G.eng && G.eng.speedK || 1);
       if (Math.sign(v.x) !== r.move || Math.abs(v.x) < cap) for (const p of r.list) p.ax = r.move * acc;
     }
   }
@@ -15938,7 +15998,7 @@ function zb_shiftTeam(t, dy) {
   for (const r of rags) if (r.team === t) for (const p of r.list) { p.y += dy; p.py += dy; }
 }
 MINIS.push({
-  id: 'zb_halfpipe', engine: 'race', rank: 12, name: 'Flippity Flop Halfpipe', icon: 'xr_car', rules: 'score', time: 60, soloTime: 60, soloGoal: 18, noCatch: true,
+  id: 'zb_halfpipe', engine: 'race', rank: 12, name: 'Flippity Flop Halfpipe', icon: 'xr_car', rules: 'score', time: 60, soloTime: 60, soloGoal: 18, noCatch: true, freeSpin: true,
   howto: 'The pipe swings you up and down. Hold ← or → to pump higher and flip in the air, then land on your wheels to bank it!',
   blurb: 'A giant skate halfpipe and 60 seconds to rack up flips and air time.',
   deco: 'night', sky: ['#1a0f3d', '#5a2a8a'], ground: ['#e0a860', '#a8743a'], edge: '#ffe2a8',
@@ -18116,7 +18176,7 @@ function updateControls() {
     const human = !isCpu(t) && playing();
     const hanging = G.phase === 'aim' && !tm.dropped;
     const air = tm.dropped && !live(t).some(r => r.touch);
-    const up = hanging ? 'SWAP' : air ? 'SLAM' : 'JUMP';
+    const up = hanging ? 'SWAP' : air && !(isMini() && G.engine === 'climb') ? 'SLAM' : 'JUMP';
     const np = isMini() && G.mini.noPunch;
     let hit = hanging ? 'DROP' : np ? 'SLAM' : 'PUNCH';
     if (isMini() && G.eng && G.eng.hitLabel) hit = G.eng.hitLabel(t) || hit;
@@ -18401,8 +18461,10 @@ for (const t of [0, 1]) {
       e.preventDefault(); if (b.disabled) return;
       b.setPointerCapture(e.pointerId); b.classList.add('held');
       if (a === 'left' || a === 'right') TEAMS[t].pad = a === 'left' ? -1 : 1;
-      if (a === 'up') TEAMS[settings.mode !== '2p' ? 0 : t].held.up = true;
-      else press(t, a === 'up' ? (G.phase === 'aim' && !TEAMS[settings.mode !== '2p' ? 0 : t].dropped ? 'up' : 'jumpOrSlam') : a);
+      else {
+        if (a === 'up') TEAMS[settings.mode !== '2p' ? 0 : t].held.up = true;
+        press(t, a === 'up' ? (G.phase === 'aim' && !TEAMS[settings.mode !== '2p' ? 0 : t].dropped ? 'up' : 'jumpOrSlam') : a);
+      }
     });
     const off = () => { b.classList.remove('held'); if ((a === 'left' && TEAMS[t].pad === -1) || (a === 'right' && TEAMS[t].pad === 1)) TEAMS[t].pad = 0; if (a === 'up') TEAMS[settings.mode !== '2p' ? 0 : t].held.up = false; };
     b.addEventListener('pointerup', off); b.addEventListener('pointercancel', off);
@@ -18476,7 +18538,7 @@ function start(data) {
   openMenu();
   requestAnimationFrame(t => { last = t; loop(t); });
   // a small handle for testing in the browser console
-  window.__tb = { G, settings, MINIS, startGame, openMenu, frame: n => { for (let i = 0; i < n; i++) { frame(DT); updateFx(DT); } draw(); updateControls(); }, press, teamsArr: TEAMS, endlessPick, chaosPick, getRags: () => rags, getBeds: () => beds, state: () => ({ rags: rags.length, items: items.length, beds: beds.length, phase: G.phase, live: G.liveT, score: G.score, rscore: G.rscore }) };
+  window.__tb = { G, settings, MINIS, startGame, openMenu, frame: n => { for (let i = 0; i < n; i++) { frame(DT); updateFx(DT); } draw(); updateControls(); }, press, teamsArr: TEAMS, endlessPick, chaosPick, getRags: () => rags, getBeds: () => beds, getCars: () => cars, state: () => ({ rags: rags.length, items: items.length, beds: beds.length, phase: G.phase, live: G.liveT, score: G.score, rscore: G.rscore }) };
 }
 
 window.claude?.hot?.ready ? window.claude.hot.ready(start) : start(window.claude?.hot?.data ?? {});
