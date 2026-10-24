@@ -234,6 +234,9 @@ kbd { font: 900 12px var(--ui); color: var(--ink); background: var(--card-2); bo
 .pad button.held { transform: translateY(3px); box-shadow: 0 0 0 var(--ink); }
 .pad button:disabled { opacity: .45; cursor: default; }
 .sys { display: flex; gap: 6px; }
+.lvlCtl { display: flex; gap: 6px; }
+.lvlCtl[hidden] { display: none; }
+#playBtn[aria-pressed="true"] { background: var(--sun); color: var(--ink); }
 .tool {
   flex: none; width: 44px; height: 44px;
   border: 3px solid var(--ink); border-radius: 12px;
@@ -261,7 +264,7 @@ kbd { font: 900 12px var(--ui); color: var(--ink); background: var(--card-2); bo
   #hud .mid { display: none; }
   .pl.p2 { justify-self: end; }
   #bar { flex-wrap: wrap; justify-content: center; }
-  .sys { order: -1; width: 100%; justify-content: center; }
+  .sys { order: -1; width: 100%; justify-content: center; flex-wrap: wrap; }
   .keys { grid-template-columns: 1fr; }
   #lvlName, #waveTxt { font-size: 11px; }
 }
@@ -384,6 +387,17 @@ kbd { font: 900 12px var(--ui); color: var(--ink); background: var(--card-2); bo
       <button class="tool" id="menuBtn" aria-label="Menu" title="Menu (Esc)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
       </button>
+      <span class="lvlCtl" id="lvlCtl" hidden>
+        <button class="tool" id="backBtn" aria-label="Previous level" title="Back: restart this level, or tap again for the one before ( [ )">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h2.6v14H6zM20 5v14l-10-7z"/></svg>
+        </button>
+        <button class="tool" id="playBtn" aria-label="Pause" title="Pause / play (P)">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path id="playIc" d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>
+        </button>
+        <button class="tool" id="nextBtn" aria-label="Next level" title="Next level ( ] )">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M15.4 5H18v14h-2.6zM4 5v14l10-7z"/></svg>
+        </button>
+      </span>
       <button class="done" id="doneBtn" hidden>Done?</button>
       <button class="tool" id="muteBtn" aria-label="Sound on" title="Sound (M)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z" fill="currentColor"/><path id="waves" d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg>
@@ -3570,8 +3584,8 @@ function saveBest(k, v, higher = true) {
 const fmtT = t => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
 
 function startGame() {
-  G.game = settings.game; G.paused = false; $('#confirm').hidden = true;
-  G.score = [0, 0]; G.round = 0; G.lives = 3; G.cleared = 0; G.played = 0; G.cards = []; G.endlessBags = {}; G.sched = []; G.engHist = [];
+  G.game = settings.game; G.paused = false; syncPlayBtn(); $('#confirm').hidden = true;
+  G.score = [0, 0]; G.round = 0; G.lives = 3; G.cleared = 0; G.played = 0; G.cards = []; G.endlessBags = {}; G.sched = []; G.engHist = []; G.hist = [];
   $('#banner').hidden = true;
   if (G.game === 'battle') { startMatch(); return; }
   nextRound();
@@ -3648,6 +3662,7 @@ function chaosPick() {
 function teamsFor(def) { return settings.mode === 'solo' && !def.vs ? [0] : [0, 1]; }
 function startRound(def) {
   G.mini = def;
+  G.hist = (G.hist || []).concat({ def, engine: G.engine }).slice(-30);
   buildLevel(-1, def);
   G.hz = []; G.marks = []; G.liveT = 0; G.heat = 0; G.rscore = [0, 0]; G.respawn = [null, null]; G.outAt = [null, null]; G.bonusT = 0; G.kept = false;
   G.mus = G.pot = G.v = G.sim = G.bell = null; G.moles = []; G.balloons = [];
@@ -3878,8 +3893,35 @@ function askDone() {
 }
 function answerDone(yes) {
   ac(); sfx.click();
-  $('#confirm').hidden = true; G.paused = false;
+  $('#confirm').hidden = true; G.paused = false; syncPlayBtn();
   if (yes) finishGame();
+}
+// ⏮ ⏯ ⏭: the player runs the level list like a music player
+function togglePause(force) {
+  if (!playing() || !$('#confirm').hidden) return;
+  ac(); sfx.click();
+  G.paused = force ?? !G.paused;
+  syncPlayBtn();
+}
+function syncPlayBtn() {
+  const b = $('#playBtn'); if (!b) return;
+  b.setAttribute('aria-pressed', String(!!G.paused)); b.setAttribute('aria-label', G.paused ? 'Play' : 'Pause');
+  $('#playIc').setAttribute('d', G.paused ? 'M7 4v16l13-8z' : 'M6 5h4v14H6zM14 5h4v14h-4z');
+}
+function skipLevel() {
+  if (!isMini() || !playing()) return;
+  ac(); sfx.click(); G.paused = false; syncPlayBtn();
+  nextRound();
+}
+// back restarts the level you're on; tap it again within a few seconds for the one before
+function backLevel() {
+  if (!isMini() || !playing()) return;
+  ac(); sfx.click(); G.paused = false; syncPlayBtn();
+  const h = G.hist || [];
+  if (h.length > 1 && G.phase !== 'roundEnd' && G.liveT < 3) { h.pop(); G.round = Math.max(1, G.round - 1); }
+  const e = h.pop() || { def: G.mini, engine: G.engine };
+  G.engine = e.engine;
+  startRound(e.def);
 }
 // pressing ✓ on Time to go?: show the final score
 function finishGame() {
@@ -17095,7 +17137,8 @@ function draw() {
   drawOffscreen();
   if (G.eng && G.eng.drawHud) G.eng.drawHud();
   drawMiniHud();
-  drawToast();
+  // paused: the PAUSED card replaces the level-name toast
+  if (G.paused && $('#confirm').hidden && playing()) drawPaused(); else drawToast();
   ctx.restore();
   if (flashT > 0) { ctx.fillStyle = `rgba(255,240,200,${flashT * 4})`; ctx.fillRect(0, 0, W, H); }
   if (sk === 'crayon') { crayonCopy(); ctx = mainCtx; }
@@ -17947,6 +17990,17 @@ function drawFx() {
   ctx.globalAlpha = 1;
 }
 
+function drawPaused() {
+  ctx.fillStyle = 'rgba(22,19,44,.35)'; ctx.fillRect(0, 0, W, H);
+  ctx.save(); ctx.translate(W / 2, H / 2); ctx.rotate(Math.sin(performance.now() / 400) * .04);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = Math.round(64 * FDK) + 'px ' + FD;
+  ctx.lineWidth = 10; ctx.strokeStyle = '#16132c'; ctx.strokeText('PAUSED', 0, 0);
+  ctx.fillStyle = '#ffc928'; ctx.fillText('PAUSED', 0, 0);
+  ctx.font = '900 18px Nunito, ui-rounded, sans-serif';
+  ctx.lineWidth = 6; ctx.strokeText('press ▶ or P to keep bouncing', 0, 52); ctx.fillStyle = '#ffffff'; ctx.fillText('press ▶ or P to keep bouncing', 0, 52);
+  ctx.restore();
+}
 function drawToast() {
   const t = G.toast; if (!t) return;
   if (!t.sw) { t.sw = true; t.text = skinWord(t.text); if (skin() === 'arcade' && G.mini && t.text === G.mini.name) t.text = `STAGE ${G.round}: ${t.text.toUpperCase()}`; }
@@ -18018,6 +18072,7 @@ function renderHud() {
   $('#pad1').hidden = settings.mode !== '2p';
   $('#keyCard2').hidden = false;
   $('#doneBtn').hidden = !(playing() && unlimited());
+  $('#lvlCtl').hidden = !(playing() && isMini());
 }
 
 const padState = [{}, {}];
@@ -18174,7 +18229,7 @@ function previewLevel() {
   renderHud();
 }
 function openMenu() {
-  G.phase = 'menu'; G.paused = false; $('#confirm').hidden = true;
+  G.phase = 'menu'; G.paused = false; syncPlayBtn(); $('#confirm').hidden = true;
   if (G.look) { G.look = null; applySkin(); buildIcons(); renderLooks(); padState[0] = {}; padState[1] = {}; }
   $('#banner').hidden = true;
   fx.confetti = []; G.toast = null;
@@ -18289,6 +18344,9 @@ addEventListener('keydown', e => {
   if (G.phase === 'over') { if ((e.code === 'Space' || e.code === 'Enter') && !$('#banner').hidden) $('#bBtns button').click(); return; }
   if (e.code === 'Escape') { openMenu(); return; }
   if (e.code === 'KeyM') { toggleMute(); return; }
+  if (e.code === 'KeyP') { togglePause(); return; }
+  if (e.code === 'BracketLeft') { backLevel(); return; }
+  if (e.code === 'BracketRight') { skipLevel(); return; }
   if (!m) return;
   const [t, a] = m;
   if (a === 'left' || a === 'right') TEAMS[t].held[a] = true;
@@ -18339,6 +18397,9 @@ cv.addEventListener('pointerup', dragEnd); cv.addEventListener('pointercancel', 
 
 $('#menuBtn').addEventListener('click', () => { ac(); sfx.click(); openMenu(); });
 $('#doneBtn').addEventListener('click', askDone);
+$('#backBtn').addEventListener('click', backLevel);
+$('#playBtn').addEventListener('click', () => togglePause());
+$('#nextBtn').addEventListener('click', skipLevel);
 $('#cYes').addEventListener('click', () => answerDone(true));
 $('#cNo').addEventListener('click', () => answerDone(false));
 function toggleMute() {
