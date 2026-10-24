@@ -1,4 +1,6 @@
-# Building party levels for Trampoline Battle
+# Adding party levels to Trampoline Battle
+
+This is the guide the level-building helpers followed for ranks 21–100. Those levels now live directly in `index.html`, pasted just above `// <<EXTRA LEVELS>>`; new levels can be added the same way.
 
 You are adding party levels to `index.html` (one self-contained file, ~5,200 lines). **Do not edit `index.html`.** Write your levels into your own fragment file (named in your task). The fragment is pasted into the game at the line `// <<EXTRA LEVELS>>`, inside the game's closing IIFE, just after the `SPRITES` table (so top-level `Object.assign(SPRITES, …)` and `Object.assign(ITEMS, …)` work). Read these parts of `index.html` before you start (search for the headings):
 
