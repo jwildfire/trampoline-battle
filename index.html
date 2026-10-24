@@ -440,7 +440,7 @@ const BODY_ORDER = ['normal', 'big', 'baby', 'fat', 'monkey'];
 
 // ================= items =================
 const ITEMS = {
-  glove:   { label: 'Mega Punch', r: 16, sprite: 'glove' },
+  glove:   { label: 'Mega Punch', r: 16, m: .6, life: 12, sprite: 'glove' },
   cow:     { label: 'Cow Drop', r: 30, m: 9, life: 10, sprite: 'cow' },
   bomb:    { label: 'Bomb', r: 15, m: 1.2, life: 99, sprite: 'bomb' },
   banana:  { label: 'Bananas', r: 13, m: .5, life: 20, fric: .005, sprite: 'banana' },
@@ -869,9 +869,12 @@ function collide() {
   }
 }
 
+const NO_PERCH = new Set(['hL', 'hR', 'eL', 'eR', 'head', 'neck']);
 function capsule(p, c, deadly) {
   // one-way ledges only catch things coming down onto them (and let you drop through on purpose)
   if (c.oneway && (p.py + p.r > Math.min(c.y1, c.y2) - c.r + 3 || (p.body.dropT || 0) > G.t)) return;
+  // only feet, knees and bottoms land on one-way ledges: a flailing hand mustn't hook one and haul the body up
+  if (c.oneway && p.body.type === 'rag' && NO_PERCH.has(p.tag)) return;
   const ex = c.x2 - c.x1, ey = c.y2 - c.y1, L2 = ex * ex + ey * ey || 1;
   const t = clamp(((p.x - c.x1) * ex + (p.y - c.y1) * ey) / L2, 0, 1);
   const cx = c.x1 + ex * t, cy = c.y1 + ey * t;
@@ -1798,7 +1801,7 @@ function updateItems(dt) {
     // on scrolling levels "off the edge" means far from the camera, not off the fixed screen
     const out = G.eng ? p.x < G.cam.x - 1600 || p.x > G.cam.x + W / G.cam.z + 1600 || p.y < G.cam.y - 1600 || p.y > G.cam.y + H / G.cam.z + 1600
       : p.x < -150 || p.x > W + 150 || p.y < -1500;
-    if (it.age > it.life || it.groundT > 2 || out) removeItem(it, !G.eng && p.x > 0 && p.x < W && p.y > 0);
+    if (it.age > it.life || it.groundT > 2 || (out && it.life < 1e9)) removeItem(it, !G.eng && p.x > 0 && p.x < W && p.y > 0);
   }
 }
 function nearestTarget(it) {
@@ -2856,7 +2859,7 @@ function seatOf(c, prev) {
 }
 function makeCar(team, vk, x, y) {
   const V = VEHICLES[vk] || VEHICLES.bathtub;
-  const c = { type: 'car', team, vk, V, list: [], sticks: [], dead: false, spinA: 0, spinB: 0, upT: 0, hopCD: 0, item: null, boostT: 0, checkX: x, done: false, slipT: 0, cpuK: rand(.72, .9), honkT: 0 };
+  const c = { type: 'car', team, vk, V, list: [], sticks: [], dead: false, spinA: 0, spinB: 0, upT: 0, hopCD: 0, item: null, boostT: 0, checkX: x, done: false, slipT: 0, cpuK: rand(.8, .95), honkT: 0 };
   const m = V.mass;
   c.wA = mkP(x - V.base / 2, y, V.wr, m, c, 'wA'); c.wB = mkP(x + V.base / 2, y, V.wr, m, c, 'wB');
   c.bA = mkP(x - V.base * .42, y - V.h, 8, m * .6, c, 'bA'); c.bB = mkP(x + V.base * .42, y - V.h, 8, m * .6, c, 'bB');
@@ -2965,8 +2968,8 @@ function racePre(dt) {
     if (ground) {
       if (dir && (Math.sign(v.x) !== dir || Math.abs(v.x) < c.V.top * (dir < 0 ? .6 : 1))) for (const p of [c.wA, c.wB]) { p.ax += dir * acc * fx; p.ay += dir * acc * fy; }
     } else {
-      // in the air, gas and brake tip the car, and it gently levels itself so holding the gas isn't a death sentence
-      const k = 1400 * dir - clamp(a, -1.2, 1.2) * 900;
+      // in the air, gas and brake tip the car, and it levels itself (with a little damping) so holding the gas isn't a death sentence
+      const k = 600 * dir + 1100 * clamp(a, -1.2, 1.2) + (vel(c.bB).y - vel(c.bA).y) * 3;
       c.bB.ay -= k; c.bA.ay += k; c.wB.ay -= k * .5; c.wA.ay += k * .5;
     }
     if (c.boostT > 0) boost = Math.max(boost, 2600);
@@ -3021,7 +3024,7 @@ function racePost(dt) {
     if (it.kind === 'rcrate') {
       it.p.y = it.baseY + Math.sin(G.t * 3 + it.p.x) * 6; it.p.py = it.p.y;
       for (const c of cars) if (!c.item && c.driver && Math.hypot(carX(c) - it.p.x, carY(c) - 30 - it.p.y) < 70) {
-        c.item = pick(G.mini.items ? G.mini.items : RACE_ITEMS); removeItem(it, true);
+        c.item = pick(G.mini.crateItems || RACE_ITEMS); removeItem(it, true);
         pop('GOT ' + c.item.toUpperCase() + '!', it.p.x, it.p.y - 30, tc(c.team), 18); sfx.pickup(); break;
       }
     } else if (it.kind === 'banana' && it.age > .4) {
@@ -13564,6 +13567,1962 @@ for (const m of MINIS) if (m.id && m.id.startsWith('yb_') && m.draw && !m.yb_wra
   const d = m.draw; m.yb_wrapped = true;
   m.draw = function (layer) { const c = ctx; c.save(); try { d.call(this, layer); } finally { c.restore(); } };
 }
+// ================= climbing levels ranks 1-10 (prefix ya_) =================
+// shared bits for these towers
+Object.assign(SPRITES, {
+  ya_piggy: [[
+    '..P.......P...',
+    '.PpP.....PpP..',
+    '.PppPPPPPppP..',
+    'PppppppppppppP',
+    'PpppkppppppppP',
+    'PppppppppPPPpP',
+    'PppppppppPkPkP',
+    'PppppppppPPPpP',
+    'PppppppppppppP',
+    '.PppppppppppP.',
+    '..PpP....PpP..',
+    '..PPP....PPP..',
+  ]],
+  ya_lift: [[
+    '.....kk.....',
+    '.....kk.....',
+    'kkkkkkkkkkkk',
+    'kgggggggggGk',
+    'kgggwggwggGk',
+    'kggwwwggggGk',
+    'kgwwwwwggwGk',
+    'kggggggwwwGk',
+    'kggggggwwwGk',
+    'kgggggggwgGk',
+    'kGGGGGGGGGGk',
+    'kkkkkkkkkkkk',
+  ]],
+});
+
+// fighters still in the round
+function ya_alive() { const out = []; for (const t of G.teams) for (const r of TEAMS[t].active) if (!r.lost) out.push(r); return out; }
+// the first ledge at or below (x, y), within maxDown
+function ya_under(x, y, maxDown = 400) {
+  let best = null;
+  for (const L of G.climb.ledges) if (!L.off && x > L.x1 - 4 && x < L.x2 + 4 && L.y1 >= y - 4 && L.y1 <= y + maxDown && (!best || L.y1 < best.y1)) best = L;
+  return best;
+}
+// standing on (or skipping along) a ledge
+const ya_onLedge = (r, L) => r.p.pelvis.y < L.y1 && r.p.pelvis.y > L.y1 - 130 && r.p.pelvis.x > L.x1 - 12 && r.p.pelvis.x < L.x2 + 12 && r.list.some(q => q.onSeg === L && q.supT < 160);
+// move a ledge (and keep it in the right collision buckets)
+function ya_move(L, x1, y) {
+  const g = statics.grid, w = L.x2 - L.x1, f = v => Math.floor(v / 160);
+  const a0 = f(L.y1 - 40), b0 = f(L.y1 + 40), a1 = f(y - 40), b1 = f(y + 40);
+  if (a0 !== a1 || b0 !== b1) {
+    for (let i = a0; i <= b0; i++) { const c = g.get(i); if (c) { const k = c.indexOf(L); if (k >= 0) c.splice(k, 1); } }
+    for (let i = a1; i <= b1; i++) { if (!g.has(i)) g.set(i, []); g.get(i).push(L); }
+  }
+  L.x1 = x1; L.x2 = x1 + w; L.y1 = L.y2 = y; L.bx1 = x1; L.bx2 = x1 + w; L.by = y;
+}
+// this round only, give the climbing engine a per-substep hook (smooth moving ledges) and/or our own camera.
+// The engine object is copied, never changed. cam(alive, dt) returns the camera's y; the engine's follow-the-leader
+// nudge is skipped (by hiding the team lists while it runs) so the "fell off the bottom" check uses our camera.
+function ya_eng(o) {
+  const E = Object.assign({}, G.eng || ENG.climb);
+  if (o.sub) E.sub = o.sub;
+  if (o.cam) E.post = dt => {
+    const C = G.climb, al = ya_alive();
+    for (const r of al) C.best[r.team] = Math.max(C.best[r.team], climbHeight(r.p.pelvis.y));
+    if (al.length) { const y = o.cam(al, dt); if (y != null && isFinite(y)) G.cam.y = y; }
+    const keep = TEAMS.map(tm => tm.active);
+    for (const tm of TEAMS) tm.active = [];
+    try { climbPost(dt); } finally { TEAMS.forEach((tm, i) => { tm.active = keep[i]; }); }
+  };
+  G.eng = E;
+}
+// highest and lowest climber
+function ya_span(al) { let lo = -1e9, hi = 1e9; for (const r of al) { lo = Math.max(lo, r.p.pelvis.y); hi = Math.min(hi, r.p.pelvis.y); } return { lo, hi }; }
+// a camera that frames everyone; if they're too far apart the slowest stays in view and the leader gets an arrow
+function ya_frameCam(al, dt, k = 3) {
+  const { lo, hi } = ya_span(al), ty = Math.max((lo + hi) / 2 - H * .5, lo - H + 150);
+  return G.cam.y + (ty - G.cam.y) * Math.min(1, dt * (ty > G.cam.y ? k * 2 : k));
+}
+// a camera that creeps up by itself (and keeps up when even the slowest climber is near the top)
+function ya_scrollCam(al, dt, speed) {
+  let y = G.cam.y - (G.phase === 'live' ? speed * dt : 0);
+  const ty = ya_span(al).lo - H * .55;
+  if (ty < y) y += (ty - y) * Math.min(1, dt * 3);
+  return y;
+}
+// the computer just climbs (its own way, which never re-jumps in mid-air)
+function ya_climb(r) {
+  const px = r.p.pelvis.x, py = r.p.pelvis.y;
+  const above = G.climb.ledges.some(L => !L.off && L.y1 < py - 30 && L.y1 > py - 250);
+  return above ? ya_goTo(r, px, py - 400) : ya_goTo(r, px < 480 ? 800 : 160, py);
+}
+// the computer waits a little for a human who's fallen behind
+function ya_lazy(r, lead = 240) {
+  if (r.team !== 1 || settings.mode === '2p') return null;
+  const h = TEAMS[0].active.find(o => !o.lost);
+  if (h ? r.p.pelvis.y > h.p.pelvis.y - lead : G.respawn[0] == null) return ya_climb(r);
+  return ya_goTo(r, clamp(r.p.pelvis.x + Math.sin(G.t * 1.3 + r.id) * 80, 60, 900), r.p.pelvis.y);
+}
+function ya_noSummit() { const C = G.climb; if (C.summit) { C.summit.off = true; C.ledges = C.ledges.filter(L => L !== C.summit); C.summit = null; } }
+function ya_noFloor() { const C = G.climb; for (const L of C.ledges) if (L.type === 'ground') L.off = true; C.ledges = C.ledges.filter(L => L.type !== 'ground'); }
+function ya_text(t, x, y, size, col) {
+  ctx.font = Math.round(size * FDK) + 'px ' + FD; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.lineWidth = Math.max(3, size / 4); ctx.strokeStyle = INK; ctx.strokeText(skinWord(t), x, y); ctx.fillStyle = col; ctx.fillText(skinWord(t), x, y);
+}
+// a red "fall past here and you're out" line at the bottom of the screen
+function ya_edge(word) {
+  const y = G.cam.y + H - 8;
+  ctx.save(); ctx.globalAlpha = .55 + .25 * Math.sin(G.t * 5); ctx.setLineDash([14, 10]); ctx.strokeStyle = '#ff3b3b'; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.moveTo(40, y); ctx.lineTo(W - 40, y); ctx.stroke(); ctx.restore();
+  ya_text(word, 150, y - 16, 13, '#ff6b6b'); ya_text(word, W - 150, y - 16, 13, '#ff6b6b');
+}
+// arrows at the top of the screen for anyone who's climbed out of view
+function ya_offArrows() {
+  for (const r of ya_alive()) {
+    const y = r.p.pelvis.y; if (y > G.cam.y + 20) continue;
+    const x = clamp(r.p.pelvis.x, 60, W - 60), ty = G.cam.y + 70, b = Math.sin(G.t * 8) * 3;
+    ctx.fillStyle = INK; tri(x - 17, ty + 3 + b, x + 17, ty + 3 + b, x, ty - 25 + b); ctx.fillStyle = tc(r.team); tri(x - 12, ty + b, x + 12, ty + b, x, ty - 19 + b);
+    ya_text(`${Math.round((G.cam.y - y) / 40)} m`, x, ty + 16, 13, tc(r.team));
+  }
+}
+// little trampolines set into the tower: the harder you land, the higher you go
+function ya_tramp(L, extra) {
+  L.ya_tramp = true;
+  L.touchFn = p => {
+    const b = p.body;
+    if (b.type !== 'rag' || b.lost || (b.ya_trT || 0) > G.t) return;
+    const vy = vel(b.p.pelvis).y;
+    if (vy < 40) return;
+    b.ya_trT = G.t + .3; L.ya_dip = 1;
+    const up = clamp(vy * .85, 680, 1150) + (extra ? extra(b, L) : 0);
+    for (const q of b.list) { const v = vel(q); setVel(q, v.x, -up); }
+    if (up > 1050) pop(pick(['BOING!', 'SPROING!', 'BOINGG!']), p.x, L.y1 - 46, '#ffe14d', 20);
+    sfx.boing(clamp(up / 1400, .3, 1));
+  };
+}
+// give every ledge of a custom type its behaviour (call each frame for never-ending towers)
+function ya_dress(map) {
+  const C = G.climb;
+  for (let i = C.ya_n || 0; i < C.ledges.length; i++) { const L = C.ledges[i]; if (!L.ya_done) { L.ya_done = true; if (map[L.type]) map[L.type](L); } }
+  C.ya_n = C.ledges.length;
+}
+function ya_drawTramp(L) {
+  const x1 = L.x1, x2 = L.x2, y = L.y1, dip = (L.ya_dip || 0) * 12, m = (x1 + x2) / 2;
+  L.ya_dip = Math.max(0, (L.ya_dip || 0) - .06);
+  // cover the plain ledge, then legs, frame, springs and a stretchy bed
+  ctx.fillStyle = INK; for (const lx of [x1 + 10, x2 - 16]) ctx.fillRect(lx, y, 6, 22);
+  ctx.strokeStyle = INK; ctx.lineWidth = 9; ctx.beginPath(); ctx.moveTo(x1 - 2, y + 2); ctx.lineTo(x2 + 2, y + 2); ctx.stroke();
+  ctx.strokeStyle = '#8f8ca8'; ctx.lineWidth = 5; ctx.stroke();
+  ctx.strokeStyle = INK; ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(x1 + 6, y - 4); ctx.quadraticCurveTo(m, y - 4 + dip * 2, x2 - 6, y - 4); ctx.stroke();
+  ctx.strokeStyle = '#2f6fe0'; ctx.lineWidth = 3.5; ctx.stroke();
+  circle(x1 + 2, y - 2, 7, INK); circle(x1 + 2, y - 2, 4.5, '#ec4a2f'); circle(x2 - 2, y - 2, 7, INK); circle(x2 - 2, y - 2, 4.5, '#ec4a2f');
+}
+// steer in mid-air toward x, braking early so we don't sail past it (air control is weak)
+function ya_airTo(r, tx) {
+  const px = r.p.pelvis.x, vx = vel(r.p.pelvis).x, d = tx - px;
+  if (Math.sign(d) === Math.sign(vx) && vx * vx / 1100 > Math.abs(d)) return { x: px - Math.sign(vx) * 60 };
+  return { x: tx };
+}
+// the computer heads for (tx, ty) along the ledges, without strolling off into nothing
+function ya_goTo(r, tx, ty) {
+  const C = G.climb, px = r.p.pelvis.x, py = r.p.pelvis.y, low = G.cam.y + H - 30;
+  // still flying up from a jump: just steer (brushing past ledges would let us jump again mid-air)
+  if (vel(r.p.pelvis).y < -150 && !r.onLadder) { const L = r.ya_hop && r.ya_hopT > G.t && !r.ya_hop.off ? r.ya_hop : null; return ya_airTo(r, L ? clamp(tx, L.x1 + 25, L.x2 - 25) : tx); }
+  if (ty != null && ty < py - 60) {
+    let best = null, bs = 1e9;
+    for (const L of C.ledges) {
+      if (L.off || L.y1 > py - 30 || L.y1 < py - 250) continue;
+      const lx = clamp(px, L.x1 + 22, L.x2 - 22);
+      const s = Math.abs(lx - px) + Math.abs(clamp(tx, L.x1, L.x2) - tx) * .6 + Math.max(0, ty - L.y1) * 1.5;
+      if (s < bs) { bs = s; best = { x: lx, y: L.y1, L }; }
+    }
+    if (best && best.L) {
+      r.ya_hop = best.L; r.ya_hopT = G.t + 1.5;
+      // a near ledge doesn't need a running jump: slow down first so we don't sail right past it
+      const g = { x: best.x, y: best.y };
+      if (best.y > py - 170 && Math.abs(vel(r.p.pelvis).x) > 200) delete g.y;
+      best = g;
+    }
+    for (const l of C.ladders) if (Math.abs(l.x - px) < 200 && py > l.y2 + 20 && py < l.y1 + 40 && ty < py - 120) {
+      const s = Math.abs(l.x - px) + 30;
+      if (s < bs) { bs = s; best = { x: l.x, y: l.y2, ladder: true }; }
+    }
+    if (best) return best;
+  }
+  const v = vel(r.p.pelvis), here = ya_under(px, py, 95);
+  if (!here) {
+    // mid-jump: steer for the ledge we jumped at
+    const L = r.ya_hop && r.ya_hopT > G.t && !r.ya_hop.off ? r.ya_hop : null;
+    return ya_airTo(r, L ? clamp(tx, L.x1 + 25, L.x2 - 25) : tx);
+  }
+  if (ty != null && ty > py + 70 && here.type !== 'ground' && Math.abs(tx - px) < 200) {
+    const below = ya_under(px, here.y1 + 14, 320);
+    if (below && below.y1 < low) r.dropT = G.t + .35;
+  }
+  // how far from the edge we need to start braking
+  const m = Math.min(70, 22 + v.x * v.x / 3000);
+  if (tx > here.x1 + m && tx < here.x2 - m) {
+    // on ice, steer against the slide to stop
+    if (here.slide > .99 && Math.abs(tx - px) < 40 && Math.abs(v.x) > 80) return { x: px - Math.sign(v.x) * 60 };
+    return { x: tx };
+  }
+  const dir = tx < px ? -1 : 1, edge = dir < 0 ? here.x1 : here.x2;
+  const step = ya_under(edge + dir * 40, here.y1 + 10, 420);
+  if (step && step.y1 < low) return { x: tx };
+  // a ledge across the gap that we can jump to
+  let hop = null, hs = 1e9;
+  for (const L of C.ledges) {
+    if (L === here || L.off || L.y1 < here.y1 - 130 || L.y1 > here.y1 + 170 || L.y1 > low) continue;
+    const gap = dir > 0 ? L.x1 - here.x2 : here.x1 - L.x2;
+    if (gap < -20 || gap > 230) continue;
+    const s = gap + Math.abs(L.y1 - here.y1) * .3;
+    if (s < hs) { hs = s; hop = L; }
+  }
+  if (hop) {
+    const nearEdge = dir * (px - edge) > -(60 + Math.abs(v.x) * .2);
+    if (nearEdge) { r.ya_hop = hop; r.ya_hopT = G.t + 1.2; if (r.team < 2 && isCpu(r.team) && Math.abs(v.x) > 150 && Math.sign(v.x) === dir) jump(r); }
+    return { x: tx, jump: nearEdge };
+  }
+  return { x: edge - dir * (m + 30) };
+}
+// squashed flat by a falling thing: no jumping, very wobbly, stars
+function ya_flatTick() {
+  for (const r of rags) {
+    if (r.lost || !(r.ya_flatT > G.t)) continue;
+    r.jumpCD = Math.max(r.jumpCD, .05);
+    for (const q of r.list) { const v = vel(q); setVel(q, v.x * .85, v.y); }
+    addVel(r.p.head, 0, 40); addVel(r.p.neck, 0, 25);
+  }
+}
+function ya_drawStars(r) {
+  const h = r.p.head;
+  for (let i = 0; i < 3; i++) { const a = G.t * 6 + i * 2.1; ctx.fillStyle = '#ffd23f'; ctx.font = Math.round(16 * FDK) + 'px ' + FD; ctx.textAlign = 'center'; ctx.fillText('★', h.x + Math.cos(a) * 22, h.y - 18 + Math.sin(a) * 7); }
+}
+
+// ---- falling farm stuff (custom kinds so the tall tower doesn't swallow them) ----
+function ya_dropUpdate(it) {
+  const p = it.p, v = vel(p);
+  if (it.age > it.life || p.x < -150 || p.x > W + 150) { removeItem(it, true); return false; }
+  it.ang = clamp(v.x / 2000, -.3, .3);
+  if (!it.ya_landed && p.supT < 3 && it.age > .3) {
+    it.ya_landed = true;
+    const k = it.kind;
+    pop(k === 'ya_cow' ? 'MOO!' : k === 'ya_piano' ? 'PLONK!' : 'CLANG!', p.x, p.y - 36, '#ffffff', 22);
+    k === 'ya_cow' ? sfx.moo() : k === 'ya_piano' ? sfx.piano() : sfx.clang(); shake(4);
+  }
+  return false;
+}
+function ya_dropTouch(it, o, ip, dir) {
+  if (o.type !== 'rag' || o.lost || o.kin || it.cd > 0) return;
+  const v = vel(ip);
+  if (v.y > 180 && ip.y < o.p.pelvis.y + 10) {
+    o.ya_flatT = G.t + 1.2; it.cd = .7;
+    const k = massK(o); pushBody(o, dir * 140 * k, 320 * k);
+    pop(pick(['PANCAKE!', 'SQUASH!', 'FLAT!']), o.p.head.x, o.p.head.y - 40, '#ffffff', 24);
+    it.kind === 'ya_cow' ? sfx.moo() : it.kind === 'ya_piano' ? sfx.piano() : sfx.clang();
+    shake(7); burst(ip.x, ip.y, 1); addVel(ip, -dir * 120, -260);
+    if (Math.random() < .5) { o.sayUntil = 0; say(o, 'ouch', 1.4); }
+  } else if (Math.hypot(v.x, v.y) > 260) { const k = massK(o); pushBody(o, dir * 260 * k, -160 * k); it.cd = .5; }
+}
+// coins for the piggy bank: picked up in the level's tick
+function ya_coinUpdate(it) {
+  const p = it.p;
+  if (it.age > it.life || p.x < -150 || p.x > W + 150) { removeItem(it, false); return false; }
+  it.ang = Math.sin(G.t * 6 + it.p.x) * .25;
+  return false;
+}
+Object.assign(ITEMS, {
+  ya_cow: { label: 'Cow', r: 30, m: 9, life: 7, sprite: 'cow', update: ya_dropUpdate, onTouch: ya_dropTouch },
+  ya_anvil: { label: 'Anvil', r: 18, m: 8, life: 7, fric: .02, sprite: 'anvil', update: ya_dropUpdate, onTouch: ya_dropTouch },
+  ya_piano: { label: 'Piano', r: 26, m: 12, life: 7, sprite: 'piano', update: ya_dropUpdate, onTouch: ya_dropTouch },
+  // a boxing glove that falls down the tower: grab it for mega punches (the game's own glove item has no weight, so it can't fly around)
+  ya_glove: { label: 'Mega Punch', r: 16, m: .6, life: 9, sprite: 'glove', update: ya_coinUpdate, onTouch(it, o) {
+    if (o.type !== 'rag' || o.lost || o.team > 1 || it.dead) return;
+    o.mega = true; o.ya_megaT = G.t + 8; removeItem(it, true);
+    pop('MEGA PUNCH!', o.p.head.x, o.p.head.y - 44, tc(o.team), 24); sfx.pickup();
+  } },
+  ya_coin: { label: 'Coin', r: 11, m: .3, life: 9, sprite: 'coin', update: ya_coinUpdate, onTouch() {} },
+  ya_gold: { label: 'Gold Coin', r: 18, m: .9, life: 9, sprite: 'coin', update: ya_coinUpdate, onTouch() {} },
+});
+
+// ---- 1. The Floor Is Lava (For Real) ----
+MINIS.push({
+  id: 'ya_lava', rank: 1, engine: 'climb', name: 'The Floor Is Lava (For Real)', icon: 'volcano',
+  rules: 'brawl', soloTime: 45, maxTime: 120, heatTime: 40,
+  howto: 'Climb! The lava never, ever stops rising.', blurb: 'Lava pours in at the bottom of the tower and it never stops.',
+  sky: ['#ff8a4a', '#ffd88a'], wallCol: '#6b3a2a', groundCol: '#8a6a58',
+  gen: { mix: { normal: 7, crumble: 2, conveyor: 1, move: 1, ya_tramp: .7 }, gapMin: 90, gapMax: 125, wMin: 140, wMax: 260, infinite: true },
+  lava: true, lavaSpeed: 24,
+  setup() {
+    G.ya_lava = { bub: [], hotT: 0 }; ya_dress({ ya_tramp: L => ya_tramp(L) });
+    // the camera follows the slowest climber, so they get a lovely view of the bubbles
+    ya_eng({ cam(al, dt) { const ty = ya_span(al).lo - H * .62; return G.cam.y + (ty - G.cam.y) * Math.min(1, dt * (ty > G.cam.y ? 10 : 4)); } });
+  },
+  cpu: r => ya_lazy(r),
+  tick(dt) {
+    const S = G.ya_lava, al = ya_alive();
+    ya_dress({ ya_tramp: L => ya_tramp(L) });
+    const lava = G.climbLava;
+    if (lava == null) return;
+    // a hot-foot hop once in a while, for anyone who dips a toe in
+    for (const r of al) {
+      const f = Math.max(r.p.fL.y, r.p.fR.y);
+      if (f > lava - 6 && r.p.pelvis.y < lava && (r.ya_toastT || 0) < G.t) {
+        r.ya_toastT = G.t + 5;
+        for (const q of r.list) { const v = vel(q); setVel(q, v.x * .6, -980); }
+        pop(pick(['TOASTY TOES!', 'HOT HOT HOT!', 'OW OW OW!']), r.p.head.x, r.p.head.y - 40, '#ffe14d', 22); sfx.zap(); puffs(r.p.pelvis.x, lava, 10, '#ff8a00');
+      }
+    }
+    if (Math.random() < dt * 6) S.bub.push({ x: rand(40, 920), t: 0, r: rand(6, 14) });
+    for (const b of S.bub) b.t += dt;
+    S.bub = S.bub.filter(b => b.t < .8);
+  },
+  draw(layer) {
+    if (layer === 'back') for (const L of G.climb.ledges) if (L.ya_tramp && L.y1 > G.cam.y - 60 && L.y1 < G.cam.y + H + 60) ya_drawTramp(L);
+    const S = G.ya_lava; if (!S || layer !== 'front' || G.climbLava == null) return;
+    const y = G.climbLava;
+    for (const b of S.bub) { const k = b.t / .8, rr = b.r * (.4 + k); ctx.globalAlpha = 1 - k * .6; circle(b.x, y + 4 - k * 10, rr + 2, INK); circle(b.x, y + 4 - k * 10, rr, '#ffb02e'); ctx.globalAlpha = 1; }
+    if (y < G.cam.y + H + 40 && y > G.cam.y + 60) ya_text('HOT HOT HOT', 480, y + 40, 18, '#ffe14d');
+    ya_offArrows();
+  },
+});
+
+// ---- 2. Shove-a-Palooza ----
+MINIS.push({
+  id: 'ya_shove', rank: 2, engine: 'climb', name: 'Shove-a-Palooza', icon: 'glove',
+  rules: 'brawl', vs: true, maxTime: 100, heatTime: 50, punchK: 1.35,
+  howto: 'Shove! Drop through ledges onto heads. Last one on screen wins.', blurb: 'An auto-scrolling tower full of very pushy stick people.',
+  sky: ['#3b2a6b', '#ff9a7a'], wallCol: '#6b4a5a', groundCol: '#6a5a7a',
+  gen: { mix: { normal: 9, crumble: 1, move: 1 }, gapMin: 85, gapMax: 115, wMin: 100, wMax: 180, infinite: true },
+  setup() { G.ya_shove = { gloveT: 6 }; ya_eng({ cam: (al, dt) => ya_scrollCam(al, dt, 30 * (1 + G.heat * .5)) }); },
+  tick(dt) {
+    const S = G.ya_shove;
+    // boxing gloves fall in now and then
+    if ((S.gloveT -= dt) <= 0) { S.gloveT = rand(7, 11); climbDrop('ya_glove', rand(120, 840), 1); }
+    for (const r of rags) if (r.mega && r.ya_megaT && r.ya_megaT < G.t) { r.mega = false; r.ya_megaT = 0; }
+  },
+  onTouch(A, B) {
+    // a ground-pound onto someone's head squashes them down the tower
+    for (const [s, o] of [[A, B], [B, A]]) {
+      if (!s.slam || o.lost || s.team === o.team || (o.ya_stompT || 0) > G.t) continue;
+      if (vel(s.p.pelvis).y > 300 && s.p.pelvis.y < o.p.pelvis.y - 20) {
+        o.ya_stompT = G.t + .8; const k = massK(o);
+        pushBody(o, Math.sign(o.p.pelvis.x - s.p.pelvis.x || 1) * 200 * k, 650 * k); o.dropT = G.t + .3;
+        pop(pick(['STOMP!', 'HEAD BONK!', 'SQUISH!']), o.p.head.x, o.p.head.y - 40, tc(s.team), 28); sfx.slam(1); shake(8);
+      }
+    }
+  },
+  cpu(r) {
+    // land on heads now and then
+    const e = nearestEnemy(r, 260);
+    if (e && !r.touch && !r.slam && e.p.pelvis.y > r.p.pelvis.y + 60 && Math.abs(e.p.pelvis.x - r.p.pelvis.x) < 50) slam(r);
+    if (e && r.touch && Math.abs(e.p.pelvis.y - r.p.pelvis.y) < 60) return ya_goTo(r, e.p.pelvis.x, e.p.pelvis.y);
+    return ya_lazy(r, 200);
+  },
+  draw(layer) { if (layer === 'front') { ya_edge('BOTTOM = OUT'); ya_offArrows(); } },
+});
+
+// ---- 3. Udderly Ridiculous ----
+MINIS.push({
+  id: 'ya_udder', rank: 3, engine: 'climb', name: 'Udderly Ridiculous', icon: 'cow',
+  rules: 'race', goal: 1, time: 150, soloTime: 120, respawn: true, heatTime: 60,
+  howto: 'Race to the flag! Watch the shadows: cows, anvils and pianos incoming.', blurb: 'First to the summit flag, while the farm falls on your head.',
+  sky: ['#8fd3ff', '#e8f8ff'], wallCol: '#9a6a3a', groundCol: '#5cbf4a',
+  gen: { mix: { normal: 8, ya_tramp: 1, crumble: 1 }, gapMin: 90, gapMax: 120, wMin: 150, wMax: 260 },
+  top: -1900,
+  setup() { G.ya_udder = { dropT: 2.5 }; ya_dress({ ya_tramp: L => ya_tramp(L) }); },
+  cpu: r => ya_lazy(r, 260),
+  tick(dt) {
+    const S = G.ya_udder, al = ya_alive();
+    ya_flatTick();
+    if ((S.dropT -= dt) <= 0 && al.length) {
+      S.dropT = Math.max(.6, rand(1.1, 1.8) - G.heat * .4);
+      const r = pick(al), k = Math.random();
+      climbDrop(k < .45 ? 'ya_cow' : k < .75 ? 'ya_anvil' : 'ya_piano', clamp(r.p.pelvis.x + rand(-220, 220), 70, 890), 1);
+    }
+  },
+  draw(layer) {
+    if (layer === 'back') {
+      // shadows on the ledges show where things will land
+      for (const it of items) {
+        if (!ITEMS[it.kind].onTouch || it.kind.indexOf('ya_') || it.ya_landed || it.kind === 'ya_coin' || it.kind === 'ya_gold') continue;
+        const L = ya_under(it.p.x, it.p.y + it.p.r, 900); if (!L) continue;
+        const k = clamp(1 - (L.y1 - it.p.y) / 900, .2, 1);
+        ctx.globalAlpha = .25 + .4 * k; ctx.fillStyle = INK; ctx.beginPath(); ctx.ellipse(it.p.x, L.y1 - 8, it.p.r * (.6 + .6 * k), 6, 0, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1;
+      }
+      for (const L of G.climb.ledges) if (L.ya_tramp) ya_drawTramp(L);
+    }
+    if (layer === 'front') for (const r of rags) if (!r.lost && r.ya_flatT > G.t) ya_drawStars(r);
+  },
+});
+
+// ---- 4. Boing to the Moon ----
+function ya_boingExtra(b) {
+  b.ya_combo = (b.ya_combo || 0) + 1; b.ya_comboT = G.t;
+  if (b.ya_combo > 1) pop(`x${b.ya_combo} COMBO!`, b.p.head.x, b.p.head.y - 50, '#ffe14d', 16 + Math.min(b.ya_combo, 10));
+  return Math.min(b.ya_combo, 6) * 35;
+}
+MINIS.push({
+  id: 'ya_moon', rank: 4, engine: 'climb', name: 'Boing to the Moon', icon: 'spring',
+  rules: 'score', time: 60, goal: 250, soloTime: 60, soloGoal: 150, respawn: true, scoreLabel: 'm', heatTime: 60,
+  howto: 'Bounce from spring to trampoline to cloud. Plain ledges break your combo!', blurb: 'A tower of springs, trampolines and clouds, straight up into space.',
+  sky: ['#7ec0ff', '#ffe9f5'], wallCol: '#5a6fb8', groundCol: '#7fd6ff',
+  gen: { mix: { normal: 3, spring: 3, ya_tramp: 4, cloud: 2 }, gapMin: 110, gapMax: 160, wMin: 120, wMax: 220, infinite: true },
+  scroll: 26,
+  setup() { G.ya_moon = 1; this.dress(); },
+  cpu: r => ya_lazy(r, 300),
+  dress() {
+    ya_dress({
+      ya_tramp: L => ya_tramp(L, ya_boingExtra),
+      spring: L => { const f = L.touchFn; L.touchFn = p => { const b = p.body, s0 = b.springT; f(p); if (b.springT !== s0) { const ex = ya_boingExtra(b); pushBody(b, 0, -ex); } }; },
+      cloud: L => { L.touchFn = p => { const b = p.body; if (b.type === 'rag' && !b.lost && (b.ya_clT || 0) < G.t && vel(b.p.pelvis).y > 200) { b.ya_clT = G.t + .4; ya_boingExtra(b); } }; },
+    });
+  },
+  tick() {
+    this.dress();
+    for (const r of ya_alive()) {
+      // landing on a plain ledge ends the combo
+      if (r.ya_combo && r.list.some(q => q.supT < 3 && q.onSeg && (q.onSeg.type === 'normal' || q.onSeg.type === 'ground'))) {
+        if (r.ya_combo > 2) pop('COMBO OVER', r.p.head.x, r.p.head.y - 44, '#ffffff', 14);
+        r.ya_combo = 0;
+      }
+    }
+    for (const t of G.teams) G.rscore[t] = Math.max(G.rscore[t], G.climb.best[t]);
+  },
+  draw(layer) {
+    if (layer === 'back') for (const L of G.climb.ledges) if (L.ya_tramp && L.y1 > G.cam.y - 60 && L.y1 < G.cam.y + H + 60) ya_drawTramp(L);
+    if (layer === 'front') {
+      ya_edge('BOTTOM = BACK DOWN');
+      // a moon waiting at the top of the sky
+      const k = clamp((520 - G.cam.y) / 6000, 0, 1);
+      ctx.save(); ctx.translate(820, G.cam.y + 150 - k * 60); drawSprite(ctx, 'moon', 0, 70 + k * 60); ctx.restore();
+    }
+  },
+});
+
+// ---- 5. Bomb Tag Tower ----
+// [x1, x2, y, options] tower pieces shared by the hand-built towers below
+const ya_bombLedges = [
+  [80, 300, 430], [660, 880, 430], [360, 600, 340], [60, 280, 250], [680, 900, 250, { type: 'ice' }], [300, 520, 160],
+  [560, 800, 70], [60, 220, 70], [280, 500, -20, { type: 'conveyor', vx: 120 }], [620, 880, -110], [60, 240, -110],
+  [330, 560, -200], [80, 300, -290, { type: 'crumble' }], [640, 860, -290], [380, 600, -380], [60, 260, -470], [700, 900, -470],
+  [300, 520, -560, { type: 'conveyor', vx: -120 }], [560, 800, -650], [100, 340, -740],
+];
+MINIS.push({
+  id: 'ya_bomb', rank: 5, engine: 'climb', name: 'Bomb Tag Tower', icon: 'bomb',
+  rules: 'score', vs: true, goal: 3, time: 100, respawn: true, heatTime: 60,
+  howto: 'Touch or punch to pass the bomb! It blows up on whoever holds it.', blurb: 'A ticking bomb, one tower, nowhere to hide.',
+  sky: ['#1a1840', '#4a3a7a'], wallCol: '#5a5a6e', groundCol: '#6a6a80',
+  ledges: ya_bombLedges, ladders: [[860, 340, 160], [100, -20, -200], [820, -380, -560]], top: -830,
+  spawn: [[200, 400], [760, 400]],
+  setup() {
+    G.ya_bomb = { holder: null, fuse: 0, cd: 0, next: 2.5, tickT: 0 };
+    // the camera keeps both players in view
+    ya_eng({ cam(al, dt) { const y = ya_frameCam(al, dt); return clamp(y, G.climb.top - 230, 0); } });
+  },
+  pass(to) {
+    const P = G.ya_bomb;
+    P.holder = to; P.cd = .7;
+    pop(pick(['TAG!', 'YOURS!', 'PASS!', 'HOT HOT HOT!']), to.p.head.x, to.p.head.y - 50, '#ff8a00', 24); sfx.peck();
+  },
+  tick(dt) {
+    const P = G.ya_bomb, al = ya_alive();
+    if (!P.holder || P.holder.lost) {
+      P.holder = null;
+      if ((P.next -= dt) <= 0 && al.length) { P.holder = pick(al); P.fuse = rand(8, 11); P.cd = .8; pop('BOMB!', P.holder.p.head.x, P.holder.p.head.y - 50, '#ff8a00', 28); sfx.fuse(); }
+      return;
+    }
+    P.cd -= dt; P.fuse -= dt;
+    if ((P.tickT -= dt) <= 0) { P.tickT = P.fuse > 3 ? .5 : P.fuse > 1.5 ? .25 : .1; sfx.tick(); }
+    if (P.fuse <= 0) {
+      const h = P.holder, q = h.p.neck, up = Math.random() < .3;
+      bigBlast(q.x, q.y, 200, 1300);
+      pushBody(h, Math.sign(480 - q.x || 1) * 380, up ? -1300 : 900);
+      if (up) pop('WAY UP!?', q.x, q.y - 90, '#7fd6ff', 24);
+      for (const t of G.teams) if (t !== h.team) miniPoint(t, 1, clamp(q.x, 90, W - 90), q.y - 120);
+      P.holder = null; P.next = 2.5;
+    }
+  },
+  onTouch(A, B) {
+    const P = G.ya_bomb;
+    if (!P || !P.holder || P.cd > 0) return;
+    const o = A === P.holder ? B : B === P.holder ? A : null;
+    if (o && !o.lost && o.team !== P.holder.team && o.team < 2) this.pass(o);
+  },
+  punchAt(r, hx, hy) {
+    const P = G.ya_bomb;
+    if (!P || P.holder !== r || P.cd > 0) return;
+    for (const o of rags) if (o.team !== r.team && o.team < 2 && !o.lost && o.list.some(q => Math.hypot(q.x - hx, q.y - hy) < q.r + 36)) { this.pass(o); return; }
+  },
+  cpu(r) {
+    const P = G.ya_bomb, e = nearestEnemy(r);
+    if (!P || !P.holder || !e) return null;
+    if (P.holder === r) return Object.assign(ya_goTo(r, e.p.pelvis.x, e.p.pelvis.y), { punch: Math.abs(e.p.pelvis.x - r.p.pelvis.x) < 70 && Math.abs(e.p.pelvis.y - r.p.pelvis.y) < 60 });
+    if (P.holder === e) {
+      // run: away sideways, and up if they're close
+      const dx = r.p.pelvis.x - e.p.pelvis.x, d = Math.hypot(dx, r.p.pelvis.y - e.p.pelvis.y);
+      if (d > 320) return { x: r.p.pelvis.x };
+      return ya_goTo(r, clamp(r.p.pelvis.x + Math.sign(dx || 1) * 260, 60, 900), r.p.pelvis.y - (d < 160 ? 120 : 0));
+    }
+    return null;
+  },
+  draw(layer) {
+    const P = G.ya_bomb;
+    if (layer === 'front') ya_offArrows();
+    if (layer !== 'front' || !P || !P.holder || P.holder.lost) return;
+    const h = P.holder.p.head, s = P.holder.s, y = h.y - 34 * s - 6;
+    ctx.save(); ctx.translate(h.x, y); drawSprite(ctx, 'bomb', 0, 30); ctx.restore();
+    if (Math.sin(G.t * (10 + clamp(1 - P.fuse / 10, 0, 1) * 40)) > 0) circle(h.x, y, 22, 'rgba(255,60,40,.35)');
+    ya_text(String(Math.max(1, Math.ceil(P.fuse))), h.x, y - 28, 16, '#ffffff');
+  },
+});
+
+// ---- 6. Crumbly King ----
+MINIS.push({
+  id: 'ya_king', rank: 6, engine: 'climb', name: 'Crumbly King', icon: 'crown',
+  rules: 'score', vs: true, goal: 15, time: 75, respawn: true, scoreLabel: 'sec', heatTime: 60,
+  howto: 'Stand on the gold ledge to score. It cracks, falls, and grows back!', blurb: 'Hold the summit. It crumbles under your feet.',
+  sky: ['#9fd8ff', '#fff4d6'], wallCol: '#a08a6a', groundCol: '#7cc35a',
+  ledges: [[70, 280, 435], [680, 890, 435], [330, 630, 350, { type: 'crumble', delay: .9 }], [80, 300, 265], [660, 880, 265],
+    [230, 390, 178, { type: 'crumble', delay: .9 }], [570, 730, 178, { type: 'crumble', delay: .9 }]],
+  top: 92, summitX1: 405, summitX2: 555,
+  spawn: [[180, 400], [780, 400]],
+  setup() { G.ya_king = { crack: 0, offT: 0, ptT: [0, 0], king: null }; ya_eng({ cam: () => -48 }); },
+  tick(dt) {
+    const K = G.ya_king, S = G.climb.summit;
+    if (!S) return;
+    if (S.off) {
+      if ((K.offT -= dt) <= 0) { S.off = false; K.crack = 0; pop('IT GREW BACK!', 480, S.y1 - 40, '#ffe14d', 22); sfx.magic(); }
+      K.king = null; return;
+    }
+    const on = G.teams.filter(t => TEAMS[t].active.some(r => !r.lost && ya_onLedge(r, S)));
+    if (on.length) K.crack += dt / (on.length > 1 ? 2.2 : 3.4);
+    K.king = on.length === 1 ? on[0] : null;
+    for (const t of G.teams) {
+      if (K.king === t) { if ((K.ptT[t] += dt) >= 1) { K.ptT[t] -= 1; miniPoint(t, 1, 480, S.y1 - 70); } }
+      else if (K.king != null) K.ptT[t] = 0;
+    }
+    if (K.crack >= 1) {
+      S.off = true; K.offT = 2.6; K.king = null;
+      pop(pick(['CRUMBLE!', 'KER-RUMBLE!', 'OOPS!']), 480, S.y1 - 40, '#ffffff', 30); sfx.kick(); shake(8);
+      puffs(480, S.y1, 16, '#c9b8a0'); puffs(440, S.y1, 8, '#8a7a60'); puffs(520, S.y1, 8, '#8a7a60');
+    }
+  },
+  cpu(r) {
+    const S = G.climb.summit; if (!S) return null;
+    const tx = 480 + (r.team ? 25 : -25);
+    // already up there: stand still and let the punches fly
+    if (!S.off && ya_onLedge(r, S) && Math.abs(r.p.pelvis.x - tx) < 55) return { x: r.p.pelvis.x };
+    const goal = ya_goTo(r, tx, S.y1 - 40);
+    if (S.off && r.p.pelvis.y > S.y1 + 120) goal.jump = false;
+    return goal;
+  },
+  draw(layer) {
+    const K = G.ya_king, S = G.climb.summit; if (!K || !S) return;
+    if (layer === 'back' && !S.off && K.crack > .1) {
+      ctx.strokeStyle = INK; ctx.lineWidth = 2.5; ctx.beginPath();
+      const n = Math.ceil(K.crack * 5);
+      for (let i = 0; i < n; i++) { const x = S.x1 + 18 + i * 28; ctx.moveTo(x, S.y1 - 6); ctx.lineTo(x + 6, S.y1 + 1); ctx.lineTo(x - 2, S.y1 + 8); }
+      ctx.stroke();
+    }
+    if (layer === 'back' && S.off) { ctx.globalAlpha = .35 + .2 * Math.sin(G.t * 8); ctx.fillStyle = '#ffc928'; roundRect(S.x1, S.y1 - 6, (S.x2 - S.x1) * (1 - K.offT / 2.6), 14, 5); ctx.fill(); ctx.globalAlpha = 1; }
+    if (layer === 'front') ya_offArrows();
+    if (layer === 'front' && K.king != null) {
+      const r = TEAMS[K.king].active.find(o => !o.lost);
+      if (r) { ctx.save(); ctx.translate(r.p.head.x, r.p.head.y - 30 * r.s); drawSprite(ctx, 'crown', 0, 30); ctx.restore(); }
+    }
+  },
+});
+
+// ---- 7. Bathtub Overflow ----
+MINIS.push({
+  id: 'ya_bath', rank: 7, engine: 'climb', name: 'Bathtub Overflow', icon: 'duck',
+  rules: 'brawl', soloTime: 45, maxTime: 90, heatTime: 45,
+  howto: 'Climb out of the bubble bath! Ducks float, soap is slippy, soggy is bad.', blurb: 'Somebody left the tap on. Climb the bathroom before the bubbles get you.',
+  sky: ['#bfe9ff', '#f2fbff'], wallCol: '#8fd0e0', groundCol: '#ffffff',
+  gen: { mix: { normal: 6, ice: 3, sticky: .6 }, gapMin: 90, gapMax: 125, wMin: 130, wMax: 250, infinite: true },
+  setup() {
+    const B = G.ya_bath = { y: 700, v: 16, ducks: [] };
+    for (let i = 0; i < 3; i++) {
+      const x = 120 + i * 300 + rand(-40, 40), L = addLedge(x, x + 76, B.y - 8, { type: 'ya_duck' });
+      L.ya_vx = (Math.random() < .5 ? -1 : 1) * rand(30, 60); L.ya_ride = 0; L.ya_sink = 0; L.ya_ph = rand(0, 6); B.ducks.push(L);
+    }
+    ya_eng({ cam: ya_frameCam, sub: () => {
+      B.y -= B.v * SDT;
+      for (const L of B.ducks) {
+        let x = L.x1 + L.ya_vx * SDT;
+        if (x < 40 || x > 844) { L.ya_vx *= -1; x = clamp(x, 40, 844); }
+        L.vx = L.off ? 0 : L.ya_vx;
+        ya_move(L, x, B.y - 8 + Math.sin(G.st * 3 + L.ya_ph) * 3 + (L.off ? 60 : 0));
+      }
+    } });
+  },
+  cpu: r => ya_lazy(r),
+  tick(dt) {
+    const B = G.ya_bath, cam = G.cam;
+    B.v = 16 + 16 * G.heat;
+    B.y = Math.min(B.y, cam.y + H + 70);
+    for (const L of B.ducks) {
+      // stand on a duck too long and it tips over
+      const riders = rags.some(r => !r.lost && ya_onLedge(r, L));
+      if (L.off) { if ((L.ya_sink -= dt) <= 0) { L.off = false; ya_move(L, rand(60, 820), L.y1); pop('SQUEAK!', L.x1 + 38, L.y1 - 30, '#ffd400', 18); } continue; }
+      L.ya_ride = riders ? L.ya_ride + dt : Math.max(0, L.ya_ride - dt);
+      if (L.ya_ride > 2) { L.off = true; L.ya_sink = 2.5; L.ya_ride = 0; pop('GLUG!', L.x1 + 38, L.y1 - 30, '#7fd6ff', 20); sfx.squeak(); }
+    }
+    for (const r of ya_alive()) {
+      const wet = r.p.pelvis.y > B.y;
+      for (const q of r.list) if (q.y > B.y) { const v = vel(q); setVel(q, v.x * .93, v.y * .93 - G0 * 1.5 * dt); }
+      if (wet) {
+        r.p.pelvis.supT = 0; // you can splash-jump out
+        if (!r.ya_inWater) { r.ya_inWater = true; pop('SPLOOSH!', r.p.pelvis.x, B.y - 30, '#7fd6ff', 22); sfx.slurp(); puffs(r.p.pelvis.x, B.y, 10, '#ffffff'); }
+        r.ya_wet = (r.ya_wet || 0) + dt;
+        if (r.ya_wet > 3) { loseBody(r, 'water'); continue; }
+      } else { r.ya_inWater = false; r.ya_wet = Math.max(0, (r.ya_wet || 0) - dt * .6); }
+      if (r.ya_wet > .2 && Math.random() < dt * 12) fx.puffs.push({ x: r.p.pelvis.x + rand(-10, 10), y: r.p.pelvis.y, vx: rand(-20, 20), vy: rand(40, 120), r: rand(2, 4), t: 0, life: .5, color: '#7fd6ff' });
+    }
+  },
+  draw(layer) {
+    const B = G.ya_bath; if (!B) return;
+    const cam = G.cam;
+    if (layer === 'back') {
+      for (const L of G.climb.ledges) {
+        if (L.y1 < cam.y - 60 || L.y1 > cam.y + H + 60) continue;
+        if (L.type === 'ice') {
+          // soap bars
+          ctx.fillStyle = INK; roundRect(L.x1 - 3, L.y1 - 11, L.x2 - L.x1 + 6, 22, 9); ctx.fill();
+          ctx.fillStyle = '#ffc4e1'; roundRect(L.x1, L.y1 - 8, L.x2 - L.x1, 16, 7); ctx.fill();
+          ctx.fillStyle = 'rgba(255,255,255,.8)'; ctx.fillRect(L.x1 + 10, L.y1 - 5, (L.x2 - L.x1) * .4, 3);
+          ya_text('SOAP', (L.x1 + L.x2) / 2, L.y1 + 1, 10, '#ff8fc7');
+          for (let i = 0; i < 3; i++) { const bx = L.x1 + 20 + ((i * 53 + G.t * 20) % (L.x2 - L.x1 - 30)); circle(bx, L.y1 - 14 - (G.t * 30 + i * 10) % 20, 3, 'rgba(255,255,255,.8)'); }
+        }
+      }
+      for (const L of B.ducks) {
+        if (L.off) continue;
+        const m = (L.x1 + L.x2) / 2, y = L.y1, f = L.ya_vx > 0 ? 1 : -1, tip = L.ya_ride > 1.4 ? Math.sin(G.t * 30) * .12 : 0;
+        ctx.save(); ctx.translate(m, y + 6); ctx.rotate(tip); ctx.scale(f, 1);
+        ctx.fillStyle = INK; ctx.beginPath(); ctx.ellipse(0, 0, 44, 20, 0, 0, Math.PI * 2); ctx.fill(); circle(24, -22, 17, INK);
+        ctx.fillStyle = '#ffd93b'; ctx.beginPath(); ctx.ellipse(0, 0, 41, 17, 0, 0, Math.PI * 2); ctx.fill(); circle(24, -22, 14, '#ffd93b');
+        ctx.fillStyle = '#ff9f1a'; tri(35, -24, 50, -19, 35, -15); circle(28, -26, 3, INK);
+        ctx.fillStyle = '#e09a00'; ctx.beginPath(); ctx.ellipse(-8, -2, 16, 7, -.3, 0, Math.PI * 2); ctx.fill();
+        ctx.restore();
+      }
+    }
+    if (layer === 'front') {
+      // the tap that started it all, still running
+      const tx = 880, ty = cam.y + 30;
+      ctx.fillStyle = INK; roundRect(tx - 50, ty - 14, 70, 28, 8); ctx.fill(); ctx.fillStyle = '#c9ccd6'; roundRect(tx - 47, ty - 11, 64, 22, 6); ctx.fill();
+      ctx.fillStyle = INK; ctx.fillRect(tx + 6, ty + 8, 18, 22); ctx.fillStyle = '#c9ccd6'; ctx.fillRect(tx + 9, ty + 8, 12, 19);
+      ctx.fillStyle = 'rgba(95,182,255,.55)'; ctx.fillRect(tx + 10, ty + 28, 10, Math.max(0, B.y - ty - 28));
+      // the water, over everything
+      if (B.y < cam.y + H + 80) {
+        const g = ctx.createLinearGradient(0, B.y, 0, B.y + 300);
+        g.addColorStop(0, 'rgba(120,200,255,.72)'); g.addColorStop(1, 'rgba(40,110,200,.9)');
+        ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(-50, cam.y + H + 400);
+        for (let x = -50; x <= W + 50; x += 20) ctx.lineTo(x, B.y + Math.sin(x / 35 + G.t * 2.5) * 5);
+        ctx.lineTo(W + 50, cam.y + H + 400); ctx.closePath(); ctx.fill();
+        ctx.strokeStyle = INK; ctx.lineWidth = 3; ctx.stroke();
+        for (let x = 30; x < W; x += 70) { const bx = x + Math.sin(G.t + x) * 10; circle(bx, B.y - 2 + Math.sin(G.t * 3 + x) * 3, 9, '#ffffff'); circle(bx + 12, B.y + 1, 6, '#ffffff'); }
+      }
+      // soggy meters
+      for (const r of ya_alive()) if (r.ya_wet > .3) {
+        const k = clamp(r.ya_wet / 3, 0, 1), x = r.p.head.x, y = r.p.head.y - 46;
+        ctx.fillStyle = INK; roundRect(x - 24, y - 5, 48, 10, 4); ctx.fill(); ctx.fillStyle = k > .7 ? '#ff3b3b' : '#5fb6ff'; roundRect(x - 22, y - 3, 44 * k, 6, 3); ctx.fill();
+        if (k > .5) ya_text('SOGGY!', x, y - 14, 12, '#bfe9ff');
+      }
+      ya_offArrows();
+    }
+  },
+});
+
+// ---- 8. Slippy Sloppy Tower ----
+MINIS.push({
+  id: 'ya_slip', rank: 8, engine: 'climb', name: 'Slippy Sloppy Tower', icon: 'snow',
+  rules: 'brawl', noPunch: true, soloTime: 50, maxTime: 120, heatTime: 60,
+  howto: 'Sprint across the ice, then jump for a giant spinning leap!', blurb: 'An endless tower of ice where running fast makes you fly.',
+  sky: ['#9fd8ff', '#f0fbff'], wallCol: '#7fb8d8', groundCol: '#e6f6ff',
+  gen: { mix: { ice: 5, normal: 1 }, gapMin: 100, gapMax: 135, wMin: 220, wMax: 380, infinite: true },
+  setup() { const S = G.ya_slip = { tier: 0, floor: 0, speed: 0 }; ya_eng({ cam: (al, dt) => ya_scrollCam(al, dt, S.speed) }); },
+  cpu: r => ya_lazy(r),
+  tick(dt) {
+    const S = G.ya_slip, C = G.climb, al = ya_alive();
+    // floors climbed by the best climber; every 15 floors the camera speeds up
+    let best = 0; for (const t of G.teams) best = Math.max(best, C.best[t]);
+    S.floor = Math.floor(best / 3);
+    const tier = Math.floor(S.floor / 15);
+    if (tier > S.tier) { S.tier = tier; pop('FASTER!', 480, G.cam.y + 140, '#5fe8ff', 34); sfx.whistle(); }
+    S.speed = G.liveT < 4 ? 0 : 20 + S.tier * 12 + G.heat * 6;
+    for (const r of al) {
+      // combo jumps spin you round like a sock in a dryer
+      if ((r.combo || 0) > (r.ya_lastCombo || 0)) { const d = r.face || 1; addVel(r.p.head, d * 700, 0); addVel(r.p.fL, -d * 700, 0); addVel(r.p.fR, -d * 700, 0); }
+      r.ya_lastCombo = r.combo || 0;
+    }
+  },
+  draw(layer) {
+    const S = G.ya_slip; if (!S || layer !== 'front') return;
+    ya_text(`FLOOR ${S.floor}`, 130, G.cam.y + 30, 22, '#5fe8ff');
+    ya_edge('BOTTOM = OUT'); ya_offArrows();
+  },
+});
+
+// ---- 9. Piggy Bank Avalanche ----
+const ya_piggyLedges = [
+  [70, 290, 435], [670, 890, 435], [350, 610, 350], [80, 300, 265], [660, 880, 265], [330, 630, 180],
+  [60, 260, 95, { type: 'conveyor', vx: 100 }], [700, 900, 95, { type: 'conveyor', vx: -100 }], [350, 610, 10], [80, 300, -75], [660, 880, -75],
+  [330, 630, -160, { type: 'ya_tramp' }], [70, 280, -245], [680, 890, -245], [320, 640, -330], [60, 260, -415], [700, 900, -415],
+  [300, 480, -500], [480, 660, -500], [380, 580, -600],
+];
+MINIS.push({
+  id: 'ya_piggy', rank: 9, engine: 'climb', name: 'Piggy Bank Avalanche', icon: 'ya_piggy',
+  rules: 'score', time: 60, goal: 60, soloTime: 60, soloGoal: 45, respawn: true, scoreLabel: 'coins', heatTime: 60,
+  howto: 'Climb into the coin waterfall! Punch the other player to spill their coins.', blurb: 'The giant piggy bank at the top cracked open. Coins everywhere!',
+  sky: ['#ffb3d9', '#fff0f7'], wallCol: '#c06a9a', groundCol: '#ff9ec7',
+  ledges: ya_piggyLedges, top: -900,
+  setup() { G.ya_piggy = { coinT: 0, goldT: 6 }; ya_noSummit(); ya_dress({ ya_tramp: L => ya_tramp(L) }); },
+  tick(dt) {
+    const S = G.ya_piggy;
+    G.cam.y = Math.max(G.cam.y, -840);
+    const coins = items.filter(i => i.kind === 'ya_coin' || i.kind === 'ya_gold');
+    if ((S.coinT -= dt) <= 0 && coins.length < 22) {
+      S.coinT = rand(.18, .32);
+      const gold = (S.goldT -= .25) <= 0; if (gold) S.goldT = rand(5, 8);
+      const it = spawnItem(gold ? 'ya_gold' : 'ya_coin', 480 + rand(-30, 30), -660, rand(-380, 380), -rand(150, 380), null);
+      it.p.gk = .7; it.val = gold ? 5 : 1;
+      if (Math.random() < .3) sfx.ding();
+    }
+    for (const it of coins) {
+      // coins that roll all the way down melt away fast, so the good stuff stays up the tower
+      if (it.p.y > 300) it.life = Math.min(it.life, it.age + .8);
+      if (it.dead || it.age < .3) continue;
+      for (const r of ya_alive()) {
+        if (!r.list.some(q => Math.hypot(q.x - it.p.x, q.y - it.p.y) < q.r + it.p.r + 4)) continue;
+        G.rscore[r.team] += it.val;
+        if (it.val > 1) {
+          // big gold coins are heavy: they knock you back a step
+          const k = massK(r); pushBody(r, Math.sign(r.p.pelvis.x - it.p.x || 1) * 380 * k, 120 * k);
+          pop('GOLD! +5', it.p.x, it.p.y - 20, '#ffd23f', 26); sfx.clang();
+        } else { pop('+1', it.p.x, it.p.y - 16, '#ffffff', 16); sfx.ding(); }
+        removeItem(it, false); break;
+      }
+    }
+  },
+  punchAt(r, hx, hy) {
+    for (const o of rags) {
+      if (o.team === r.team || o.team > 1 || o.lost || (o.ya_spillT || 0) > G.t) continue;
+      if (!o.list.some(q => Math.hypot(q.x - hx, q.y - hy) < q.r + 36)) continue;
+      const lose = Math.floor(G.rscore[o.team] / 2);
+      o.ya_spillT = G.t + 1.5;
+      if (lose < 1) return;
+      G.rscore[o.team] -= lose;
+      pop(`-${lose} COINS!`, o.p.head.x, o.p.head.y - 50, '#ffd23f', 24); sfx.slurp();
+      const n = Math.min(lose, 8);
+      for (let i = 0; i < n; i++) { const it = spawnItem('ya_coin', o.p.pelvis.x, o.p.pelvis.y - 30, rand(-300, 300), -rand(300, 520), null); it.val = Math.ceil(lose / n); it.life = 6; it.age = .1; }
+      return;
+    }
+  },
+  cpu(r) {
+    let best = null, bs = 1e9;
+    for (const it of items) {
+      if ((it.kind !== 'ya_coin' && it.kind !== 'ya_gold') || it.dead) continue;
+      const dy = it.p.y - r.p.pelvis.y, s = Math.abs(it.p.x - r.p.pelvis.x) + Math.abs(dy) * 1.3 + (dy < -260 ? 300 : 0) + (it.p.supT > 10 ? 120 : 0) - (it.val > 1 ? 60 : 0);
+      if (s < bs) { bs = s; best = it; }
+    }
+    if (!best) return ya_goTo(r, 480, -600);
+    return ya_goTo(r, best.p.x, best.p.y);
+  },
+  draw(layer) {
+    if (layer === 'back') {
+      for (const L of G.climb.ledges) if (L.ya_tramp) ya_drawTramp(L);
+      // the giant cracked piggy bank
+      const x = 480, y = -680, wob = Math.sin(G.t * 9) * 3;
+      ctx.save(); ctx.translate(x, y + wob);
+      ctx.fillStyle = INK; ctx.beginPath(); ctx.ellipse(0, 0, 118, 78, 0, 0, Math.PI * 2); ctx.fill();
+      for (const lx of [-70, -30, 30, 70]) { ctx.fillRect(lx - 14, 50, 28, 40); }
+      ctx.fillStyle = '#f6a6b2'; ctx.beginPath(); ctx.ellipse(0, 0, 113, 73, 0, 0, Math.PI * 2); ctx.fill();
+      for (const lx of [-70, -30, 30, 70]) { ctx.fillRect(lx - 11, 50, 22, 36); }
+      ctx.fillStyle = INK; tri(-60, -60, -30, -110, -10, -66); tri(60, -60, 30, -110, 10, -66);
+      ctx.fillStyle = '#d9607a'; tri(-52, -62, -32, -98, -18, -66); tri(52, -62, 32, -98, 18, -66);
+      ctx.fillStyle = INK; ctx.beginPath(); ctx.ellipse(112, 6, 26, 30, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#d9607a'; ctx.beginPath(); ctx.ellipse(112, 6, 22, 26, 0, 0, Math.PI * 2); ctx.fill();
+      circle(106, -2, 5, INK); circle(118, 12, 5, INK); circle(62, -24, 8, INK); circle(64, -26, 3, '#ffffff');
+      ctx.fillStyle = INK; ctx.fillRect(-36, -76, 72, 10);
+      ctx.strokeStyle = INK; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(-20, -70); ctx.lineTo(-8, -40); ctx.lineTo(-24, -14); ctx.lineTo(-6, 18); ctx.moveTo(20, -70); ctx.lineTo(30, -36); ctx.lineTo(14, -10); ctx.stroke();
+      ctx.restore();
+      ya_text('OINK!', 480, -790, 22, '#ff4fd8');
+    }
+  },
+});
+
+// ---- 10. Elevator Punch-Up ----
+MINIS.push({
+  id: 'ya_lift', rank: 10, engine: 'climb', name: 'Elevator Punch-Up', icon: 'ya_lift',
+  rules: 'brawl', vs: true, maxTime: 90, heatTime: 45,
+  howto: 'Ride the elevators, hop between them, punch people off!', blurb: 'Three elevators zoom up and down an open shaft.',
+  sky: ['#2b2d3a', '#5a5f6e'], wallCol: '#4a4f5e', groundCol: '#4a4f5e',
+  ledges: [[40, 150, 130, { type: 'crumble', delay: 1 }], [810, 920, 130, { type: 'crumble', delay: 1 }]],
+  top: -3000, spawn: [[170, 40], [790, 40]],
+  setup() {
+    ya_noSummit(); ya_noFloor();
+    const lifts = G.ya_lift = [[55, 285, 6, 0], [375, 585, 4.6, 2.2], [675, 905, 7.2, 4.1]].map(([x1, x2, per, ph]) => {
+      const L = addLedge(x1, x2, 400, { type: 'ya_lift' }); L.slide = .6; L.ya_per = per; L.ya_a = ph; return L;
+    });
+    // each lift runs on its own clock, and they all speed up as the round heats up
+    const at = L => 310 + 150 * Math.sin(L.ya_a);
+    for (const L of lifts) ya_move(L, L.x1, at(L));
+    ya_eng({ cam: () => 0, sub: () => { for (const L of lifts) { L.ya_a += SDT * 2 * Math.PI / L.ya_per * (1 + Math.min(G.heat, 2) * .25); ya_move(L, L.x1, at(L)); }
+      // lifts have grippy floors: stand still and you stay put
+      for (const r of rags) {
+        if (r.lost || r.move || !lifts.some(L => r.list.some(q => q.onSeg === L && q.supT < 16))) continue;
+        for (const q of r.list) q.px += (q.x - q.px) * .02;
+      }
+    } });
+  },
+  cpu(r) {
+    const lifts = G.ya_lift, e = nearestEnemy(r), px = r.p.pelvis.x, py = r.p.pelvis.y, v = vel(r.p.pelvis);
+    const here = ya_under(px, py, 95);
+    if (!here) {
+      // in the air: aim for the lift we jumped at, or whatever is underneath
+      const L = r.ya_hop && r.ya_hopT > G.t ? r.ya_hop : lifts.find(L => px > L.x1 - 60 && px < L.x2 + 60 && L.y1 > py) || lifts.reduce((a, b) => Math.abs((a.x1 + a.x2) / 2 - px) < Math.abs((b.x1 + b.x2) / 2 - px) ? a : b);
+      return ya_airTo(r, (L.x1 + L.x2) / 2);
+    }
+    const mid = (here.x1 + here.x2) / 2;
+    if (!e) return { x: mid };
+    // same lift: go and punch them
+    if (ya_under(e.p.pelvis.x, e.p.pelvis.y, 95) === here) return { x: clamp(e.p.pelvis.x, here.x1 + 30, here.x2 - 30) };
+    // hop to the next lift toward them, but only when it's level or a little below
+    const dir = Math.sign(e.p.pelvis.x - px) || 1;
+    const next = lifts.find(L => L !== here && (dir > 0 ? L.x1 > here.x2 - 10 && L.x1 - here.x2 < 160 : L.x2 < here.x1 + 10 && here.x1 - L.x2 < 160));
+    if (next && next.y1 > here.y1 - 40 && next.y1 < here.y1 + 110) {
+      const edge = dir > 0 ? here.x2 : here.x1, near = dir * (px - edge) > -(60 + Math.abs(v.x) * .2);
+      if (near) { r.ya_hop = next; r.ya_hopT = G.t + 1.2; if (Math.abs(v.x) > 150 && Math.sign(v.x) === dir) jump(r); }
+      return { x: (next.x1 + next.x2) / 2, jump: near };
+    }
+    return { x: mid + dir * 40 };
+  },
+  draw(layer) {
+    const lifts = G.ya_lift; if (!lifts) return;
+    if (layer === 'back') {
+      for (const L of lifts) {
+        const m = (L.x1 + L.x2) / 2;
+        // cables and a pulley at the top of the shaft
+        ctx.strokeStyle = INK; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(L.x1 + 16, L.y1 - 6); ctx.lineTo(m - 14, -10); ctx.moveTo(L.x2 - 16, L.y1 - 6); ctx.lineTo(m + 14, -10); ctx.stroke();
+        circle(m, 6, 20, INK); circle(m, 6, 16, '#8f8ca8'); circle(m, 6, 5, INK);
+        ctx.fillStyle = INK; roundRect(L.x1 - 4, L.y1 - 10, L.x2 - L.x1 + 8, 26, 6); ctx.fill();
+        ctx.fillStyle = '#c9c7d6'; roundRect(L.x1, L.y1 - 7, L.x2 - L.x1, 20, 4); ctx.fill();
+        ctx.save(); ctx.beginPath(); ctx.rect(L.x1, L.y1 + 3, L.x2 - L.x1, 9); ctx.clip();
+        for (let x = L.x1 - 20; x < L.x2; x += 20) { ctx.fillStyle = '#ffc928'; ctx.beginPath(); ctx.moveTo(x, L.y1 + 12); ctx.lineTo(x + 10, L.y1 + 3); ctx.lineTo(x + 20, L.y1 + 3); ctx.lineTo(x + 10, L.y1 + 12); ctx.fill(); }
+        ctx.restore();
+      }
+    }
+    if (layer === 'front') { ya_edge('OUT'); ya_offArrows(); }
+  },
+});
+// ================= racing levels ranks 1-10 (prefix za_) =================
+// Avalanche!, Banana Peel Grand Prix, Cow-tapult, Trampoline Highway, Flush Rush, Hot Potato Truck,
+// King of the Hump, Moo-ve Over!, Car Wash of Doom, Pop Goes the Bumper.
+// The items here (banana peels) manage their own lifetime: update() returns false, so the engine's off-screen clean-up skips them.
+
+Object.assign(SPRITES, {
+  za_toilet: [[
+    '.GGG........',
+    '.Gwwg.......',
+    '.Gwwg.......',
+    '.Gwwg.......',
+    '.GwwgGGGGGGG',
+    '.Gwwwccccccw',
+    '..Gwwwwwwwg.',
+    '...Gwwwwwg..',
+    '....Gwwwg...',
+    '....Gwwwg...',
+    '...GGGGGGGG.',
+  ]],
+});
+// a peel drawn over a car's head means "you have a peel to drop"
+RACE_ICON.za_peel = 'banana';
+RACE_ICON.za_turbo = 'xr_rocket';
+
+// ---- shared helpers ----
+const za_car = t => cars.find(c => c.team === t && c.driver && c.driver.seat);
+const za_seated = c => !!(c && c.driver && c.driver.seat);
+// move a car (and its driver) so it sits on the road at x
+function za_place(c, x, vx = 0) {
+  // sit it on the higher of the two spots under its wheels so neither wheel starts inside the ground
+  const h = c.V.base / 2, gs = [groundY(x - h), groundY(x), groundY(x + h)].filter(v => v != null);
+  if (!gs.length) return;
+  const dx = x - carX(c), dy = Math.min(...gs) - c.V.wr - 4 - carY(c);
+  moveBody(c.list, dx, dy); if (c.driver && c.driver.seat) moveBody(c.driver.list, dx, dy);
+  for (const p of c.list) setVel(p, vx, 0);
+  if (c.driver && c.driver.seat) for (const p of c.driver.list) setVel(p, vx, 0);
+  c.checkX = x;
+}
+// give a whole car (and its seated driver) one velocity, which also stops it spinning
+function za_vel(c, vx, vy) {
+  for (const p of c.list) setVel(p, vx, vy);
+  if (c.driver && c.driver.seat) for (const p of c.driver.list) setVel(p, vx, vy);
+}
+// what the car's pedal is doing right now (computer players remember their last choice)
+const za_dirOf = c => isCpu(c.team) ? (c.za_dir ?? 0) : teamDir(c.team);
+const za_cpuDir = (c, d) => { c.za_dir = d; return { dir: d }; };
+// backing up is as strong as driving forward in the arenas (cars always face right)
+function za_rev(c, dt) {
+  const dir = za_dirOf(c);
+  if (dir >= 0 || !za_seated(c) || !carGround(c)) return;
+  const v = carVel(c), a = carAng(c), k = c.V.acc * .6 * dir * dt;
+  if (v.x > -c.V.top * .95) for (const p of [c.wA, c.wB]) addVel(p, k * Math.cos(a), k * Math.sin(a));
+}
+// In the air the engine tips the car with k = 1400 * dir - clamp(a) * 900. The angle term has the wrong sign (it pushes the
+// nose further the way it is already tipped) and the gas term beats any levelling, so holding the gas through a jump always
+// ends in a backflip. While the engine has exactly that line, nudge it to k = 600 * dir + 1100 * clamp(a) for these levels.
+const za_airBug = /const k = 1400 \* dir - clamp\(a, -1\.2, 1\.2\) \* 900;/.test(String(racePre));
+function za_level(dt) {
+  if (!za_airBug) return;
+  for (const c of cars) {
+    if (c.dead || carGround(c)) continue;
+    const ca = clamp(carAng(c), -1.2, 1.2), r = c.driver;
+    const dir = r && r.seat && G.phase === 'live' && !c.done && !isCpu(c.team) ? teamDir(c.team) : 0;
+    // plus a little damping so it settles instead of swinging past level
+    const k = (-800 * dir + 2000 * ca) * dt + (vel(c.bB).y - vel(c.bA).y) * .06;
+    addVel(c.bB, 0, -k); addVel(c.bA, 0, k); addVel(c.wB, 0, -k / 2); addVel(c.wA, 0, k / 2);
+  }
+}
+// arenas are small: keep cars from going ballistic
+function za_cap(c, top) {
+  const v = carVel(c);
+  if (Math.abs(v.x) > top) { const k = -(v.x - Math.sign(v.x) * top) * .15; for (const p of c.list) addVel(p, k, 0); }
+}
+// soft cushions at the ends of an arena: holding the gas into a hard wall makes a car climb it like a gecko and flip
+function za_cushion(c, x1, x2, dt) {
+  const h = c.V.base / 2 + 14, cx = carX(c), v = carVel(c);
+  const out = cx - h < x1 ? 1 : cx + h > x2 ? -1 : 0;
+  if (!out) return;
+  const depth = out > 0 ? x1 - (cx - h) : cx + h - x2;
+  let k = out * Math.min(60, depth) * 45 * dt;
+  if (Math.sign(v.x) === -out && Math.abs(v.x) > 60) { k += -v.x * 1.5; if ((c.za_bonk || 0) < G.t) { c.za_bonk = G.t + .4; pop('BOINK!', out > 0 ? x1 : x2, carY(c) - 50, '#ffffff', 18); sfx.bumper(); } }
+  for (const p of c.list) addVel(p, k, 0);
+  if (c.driver && c.driver.seat) for (const p of c.driver.list) addVel(p, k, 0);
+}
+function za_arena(dt, top = 680, x1 = -1e9, x2 = 1e9) { for (const c of cars) { c.stuckT = 0; za_rev(c, dt); za_cap(c, top); za_cushion(c, x1, x2, dt); } }
+// respawned cars go back to their own end of the arena
+function za_homes(X) {
+  const mid = (X[0] + X[X.length - 1]) / 2;
+  for (const c of cars) {
+    let x = X[c.team] ?? X[0];
+    if (!c.za_ok) {
+      c.za_ok = true;
+      // someone parked on your spawn? come in a bit closer to the middle instead
+      if (cars.some(o => o !== c && Math.abs(carX(o) - x) < 170)) x += Math.sign(mid - x) * 230;
+      za_place(c, x);
+    }
+    c.checkX = X[c.team] ?? X[0];
+  }
+}
+function za_drawCushion(x, gy, dir) {
+  ctx.save(); ctx.translate(x, gy);
+  ctx.fillStyle = '#ff4fd8'; ctx.strokeStyle = INK; ctx.lineWidth = 4; roundRect(dir > 0 ? -26 : 0, -150, 26, 154, 12); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#ffffff'; for (let y = -140; y < 0; y += 36) { roundRect(dir > 0 ? -22 : 4, y, 18, 14, 6); ctx.fill(); }
+  ctx.restore();
+}
+function za_word(txt, x, y, size, col) {
+  ctx.font = Math.round(size * FDK) + 'px ' + FD; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.lineWidth = Math.max(3, size / 4); ctx.strokeStyle = INK; ctx.lineJoin = 'round';
+  ctx.strokeText(skinWord(txt), x, y); ctx.fillStyle = col; ctx.fillText(skinWord(txt), x, y);
+}
+// draw in screen pixels from inside a world-space draw()
+function za_onScreen(fn) { ctx.save(); ctx.translate(G.cam.x, G.cam.y); ctx.scale(1 / G.cam.z, 1 / G.cam.z); fn(); ctx.restore(); }
+// a fixed camera that frames an arena from x1 to x2
+function za_frame(x1, x2, yMid) {
+  const z = Math.min(1, W / (x2 - x1));
+  G.cam.z = z; G.cam.x = (x1 + x2) / 2 - W / 2 / z; G.cam.y = yMid - H * .56 / z;
+}
+function za_confetti(x, y, n) { for (const col of ['#ff4fd8', '#ffd23f', '#5ee08a', '#6ad1ff', '#ff5a7a']) puffs(x, y, n, col); }
+const za_viewR = () => G.cam.x + W / G.cam.z;
+
+// ================= 1. Avalanche! =================
+const za_avTrack = (() => {
+  const t = [['flat', 520]];
+  const pat = [['slope', 500, 45], ['bumps', 360, 3, 10], ['slope', 400, 30], ['flat', 200], ['dip', 420, 30], ['slope', 500, 55], ['slope', 300, -30],
+    ['bumps', 300, 2, 14], ['slope', 450, 40], ['flat', 300], ['slope', 300, -40], ['hill', 400, 30], ['slope', 500, 60]];
+  for (let i = 0; i < 12; i++) for (const p of pat) t.push(p);
+  return t;
+})();
+function za_avDrawThing(k, s, col) {
+  if (k === 'tree') {
+    ctx.fillStyle = '#7a4d2a'; ctx.fillRect(-4 * s, -14 * s, 8 * s, 14 * s);
+    ctx.strokeStyle = INK; ctx.lineWidth = 2.5;
+    for (const [w, y] of [[26, -14], [21, -30], [15, -44]]) { ctx.fillStyle = '#2e7d32'; ctx.beginPath(); ctx.moveTo(-w * s, y * s); ctx.lineTo(w * s, y * s); ctx.lineTo(0, (y - 22) * s); ctx.closePath(); ctx.fill(); ctx.stroke(); ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.moveTo(-w * .4 * s, (y - 12) * s); ctx.lineTo(w * .4 * s, (y - 12) * s); ctx.lineTo(0, (y - 22) * s); ctx.closePath(); ctx.fill(); }
+  } else if (k === 'snowman') {
+    ctx.strokeStyle = INK; ctx.lineWidth = 2.5;
+    for (const [y, r] of [[-12, 13], [-34, 10], [-50, 7]]) { ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(0, y * s, r * s, 0, 7); ctx.fill(); ctx.stroke(); }
+    ctx.fillStyle = '#ff8a1a'; tri(2 * s, -51 * s, 12 * s, -49 * s, 2 * s, -47 * s); circle(-2 * s, -53 * s, 1.6 * s, INK);
+    ctx.fillStyle = INK; ctx.fillRect(-7 * s, -64 * s, 14 * s, 8 * s); ctx.fillRect(-10 * s, -57 * s, 20 * s, 2.5 * s);
+  } else if (k === 'cow') {
+    ctx.save(); ctx.translate(0, -16 * s); drawSprite(ctx, 'cow', 0, 52 * s); ctx.restore();
+  } else if (k === 'car') {
+    ctx.strokeStyle = INK; ctx.lineWidth = 2.5; ctx.fillStyle = col; roundRect(-22 * s, -22 * s, 44 * s, 16 * s, 5); ctx.fill(); ctx.stroke();
+    circle(-13 * s, -5 * s, 7 * s, INK); circle(13 * s, -5 * s, 7 * s, INK); circle(-13 * s, -5 * s, 3 * s, '#c9c7d6'); circle(13 * s, -5 * s, 3 * s, '#c9c7d6');
+    circle(0, -32 * s, 9 * s, INK); circle(0, -32 * s, 7 * s, '#ecc79c'); circle(-3 * s, -33 * s, 1.5 * s, INK); circle(3 * s, -33 * s, 1.5 * s, INK);
+    ctx.fillStyle = col; ctx.fillRect(-18 * s, -32 * s, 6 * s, 3 * s); ctx.fillRect(12 * s, -32 * s, 6 * s, 3 * s);
+  }
+}
+MINIS.push({
+  id: 'za_avalanche', rank: 1, engine: 'race', name: 'Avalanche!', icon: 'xa_snowball',
+  rules: 'survive', soloTime: 30, maxTime: 100, heatTime: 45, noPunch: true, noCatch: true,
+  howto: 'Race downhill! The giant snowball rolls everything up, so keep the gas down and hop the bumps.',
+  blurb: 'A giant snowball rolls down the mountain behind you, swallowing everything it touches.',
+  deco: 'snow', sky: ['#7fb8ff', '#e6f3ff'], ground: ['#f4f8ff', '#c9d8f0'], edge: '#9fb6d8',
+  track: za_avTrack, startY: 300, crateEvery: 0,
+  setup() {
+    G.catchT = 1e9;
+    const A = G.za_av = { x: -800, y: 0, R: 95, ang: 0, stuck: [], deco: [], flakes: [] };
+    for (let x = 650; x < G.track.finish; x += rand(240, 480)) A.deco.push({ x, k: pick(['tree', 'tree', 'cow', 'snowman', 'tree', 'cow']), s: rand(.8, 1.15), got: false });
+    for (let i = 0; i < 40; i++) A.flakes.push([rand(0, W), rand(0, H), rand(1.5, 3.5), rand(20, 60)]);
+    A.y = (groundY(A.x) ?? 300) - A.R;
+  },
+  tick(dt) {
+    za_level(dt);
+    const A = G.za_av; G.catchT = 1e9;
+    for (const c of cars) za_cap(c, 820);   // downhill all the way: keep it fast but not silly
+    const xs = cars.filter(za_seated).map(carX), last = xs.length ? Math.min(...xs) : A.x;
+    if (A.x < last - 820 - A.R * .5) A.x = last - 820 - A.R * .5;   // it is never far behind
+    const sp = 420 + 260 * Math.min(1, G.liveT / 35) + Math.max(0, G.liveT - 35) * 12;
+    A.x += sp * dt; A.ang += sp * dt / A.R;
+    const gy = groundY(A.x) ?? groundY(A.x + 60) ?? A.y + A.R;
+    A.y += (gy - A.R + 8 - A.y) * Math.min(1, dt * 8);
+    // it scoops up trees, cows and snowmen and grows
+    for (const d of A.deco) if (!d.got && d.x < A.x + A.R * .7) {
+      d.got = true; A.R = Math.min(230, A.R + 5);
+      A.stuck.push({ k: d.k, a: .9 - A.ang + rand(-.3, .3), s: d.s * .8 });
+      if (d.k === 'cow') { pop('MOO?!', d.x, A.y - A.R, '#ffffff', 18); if (d.x > G.cam.x) sfx.moo(); }
+    }
+    // and cars
+    for (const c of cars.slice()) if (za_seated(c) && carX(c) < A.x + A.R * .8) {
+      const r = c.driver;
+      A.stuck.push({ k: 'car', a: .7 - A.ang, s: 1, col: tc(c.team) });
+      ejectDriver(c, pick(['ROLLED UP!', 'SNOWBALLED!', 'BRRRR!']));
+      removeRag(r); removeCar(c); A.R = Math.min(230, A.R + 8);
+      sfx.slam(1); shake(10);
+    }
+    for (const r of rags) if (!r.lost && !r.seat && r.p.pelvis.x < A.x + A.R * .7) loseBody(r, 'crash');
+    if (A.stuck.length > 18) A.stuck.shift();
+  },
+  draw(layer) {
+    const A = G.za_av; if (!A) return;
+    if (layer === 'back') {
+      const L = G.cam.x - 100, R = za_viewR() + 100;
+      for (const d of A.deco) {
+        if (d.got || d.x < L || d.x > R) continue;
+        const y = groundY(d.x); if (y == null) continue;
+        ctx.save(); ctx.translate(d.x, y + 4); za_avDrawThing(d.k, d.s); ctx.restore();
+      }
+    }
+    if (layer !== 'front') return;
+    const R = A.R;
+    // snow spray behind it, then the ball and everything stuck to it
+    ctx.fillStyle = 'rgba(255,255,255,.75)';
+    for (let i = 0; i < 7; i++) { ctx.beginPath(); ctx.arc(A.x - R * .7 - i * 28, A.y + R * .75 - Math.abs(Math.sin(G.t * 6 + i)) * 30 - i * 6, 16 - i * 1.5, 0, 7); ctx.fill(); }
+    ctx.save(); ctx.translate(A.x, A.y); ctx.rotate(A.ang);
+    ctx.fillStyle = '#ffffff'; ctx.strokeStyle = INK; ctx.lineWidth = 6;
+    ctx.beginPath(); ctx.arc(0, 0, R, 0, 7); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#d6e4f7';
+    for (const [a, d, s] of [[0, .5, .22], [2, .62, .16], [4, .4, .18], [5.2, .7, .12], [1, .2, .1]]) { ctx.beginPath(); ctx.arc(Math.cos(a) * R * d, Math.sin(a) * R * d, R * s, 0, 7); ctx.fill(); }
+    for (const s of A.stuck) {
+      ctx.save(); ctx.rotate(s.a); ctx.translate(R * .9, 0); ctx.rotate(Math.PI / 2);
+      za_avDrawThing(s.k, s.s, s.col); ctx.restore();
+    }
+    ctx.restore();
+    // where is it? (when it is off the left of the screen)
+    za_onScreen(() => {
+      const sx = (A.x + R - G.cam.x) * G.cam.z;
+      if (sx < 0) {
+        const xs = cars.filter(za_seated).map(carX), m = xs.length ? Math.max(0, Math.round((Math.min(...xs) - A.x - R) / 20)) : 0;
+        const y = H * .5 + Math.sin(G.t * 8) * 4;
+        ctx.fillStyle = '#ff3b3b'; ctx.strokeStyle = INK; ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.moveTo(14, y); ctx.lineTo(40, y - 22); ctx.lineTo(40, y + 22); ctx.closePath(); ctx.fill(); ctx.stroke();
+        za_word('SNOWBALL', 96, y - 10, 16, '#ffffff'); za_word(m + 'm', 96, y + 12, 18, '#ff3b3b');
+      }
+      // falling snow
+      ctx.fillStyle = '#ffffff'; ctx.globalAlpha = .8;
+      for (const f of A.flakes) { const x = ((f[0] + Math.sin(G.t + f[1]) * 20) % W + W) % W, y = ((f[1] + G.t * f[3]) % H + H) % H; ctx.fillRect(x, y, f[2], f[2]); }
+      ctx.globalAlpha = 1;
+    });
+  },
+});
+
+// ================= 2. Banana Peel Grand Prix =================
+Object.assign(ITEMS, {
+  za_peel: { label: 'Banana Peel', r: 12, m: .4, life: 45, fric: .005, sprite: 'banana',
+    update(it, dt) {
+      const p = it.p, v = vel(p);
+      if (it.age > it.life || p.y > (G.killY || 2000)) { removeItem(it, false); return false; }
+      if (Math.abs(v.x) > 15) it.ang += v.x * dt / p.r * .6;
+      if (it.age > .3) for (const c of cars) {
+        if (!za_seated(c) || c.slipT > 0 || (it.team === c.team && it.age < 1.2)) continue;
+        if (Math.hypot(carX(c) - p.x, carY(c) - p.y) < 44) { za_slip(c, it); break; }
+      }
+      return false;
+    } },
+});
+function za_slip(c, it) {
+  c.slipT = 1.2;
+  for (const p of [c.wA, c.wB]) { const pv = vel(p); addVel(p, -pv.x * .45, -160); }
+  // spin out: the car twirls, and now and then the driver goes flying
+  const s = Math.random() < .5 ? 1 : -1;
+  addVel(c.bB, 0, -260 * s); addVel(c.bA, 0, 260 * s);
+  pop(pick(['SLIP!', 'WHOOPS!', 'SKREEE!', 'BANANA\'D!']), it.p.x, it.p.y - 40, '#ffd400', 24); sfx.slip();
+  removeItem(it, false);
+  if (Math.random() < .22) ejectDriver(c, 'SPLAT!');
+}
+function za_throwPeel(x, y, tx, team) {
+  const ty = (groundY(tx) ?? y + 200) - 14, T = .95;
+  const vx = (tx - x) / T, vy = (ty - y - .5 * G0 * grav * T * T) / T;
+  const it = spawnItem('za_peel', x, y, vx, vy, team); it.life = 30;
+  return it;
+}
+MINIS.push({
+  id: 'za_banana', rank: 2, engine: 'race', name: 'Banana Peel Grand Prix', icon: 'banana',
+  rules: 'race', goal: 1, time: 120, vs: true, noPunch: true,
+  howto: 'Punch drops a banana peel behind you, forever. Hop over peels, and watch out for the monkey!',
+  blurb: 'Everyone gets unlimited banana peels. Everyone.',
+  deco: 'farm', sky: ['#5fb6ff', '#d8f1ff'], ground: ['#7cc46a', '#4f9a3c'],
+  track: [['flat', 520], ['bumps', 400, 3, 14], ['flat', 300], ['hill', 500, 70], ['flat', 250], ['check'], ['slope', 300, -60], ['flat', 400], ['dip', 500, 60],
+    ['bumps', 300, 2, 18], ['flat', 300], ['check'], ['hill', 600, 85], ['flat', 300], ['slope', 300, 60], ['flat', 400], ['check'], ['bumps', 400, 4, 12],
+    ['flat', 500], ['hill', 400, 40], ['flat', 400], ['check'], ['dip', 600, 70], ['flat', 300], ['bumps', 500, 4, 14], ['flat', 300], ['check'],
+    ['slope', 400, -70], ['flat', 300], ['hill', 500, 60], ['slope', 400, 70], ['flat', 400], ['check'], ['bumps', 400, 3, 16], ['flat', 500], ['dip', 400, 40],
+    ['flat', 400], ['check'], ['hill', 600, 70], ['flat', 900], ['finish']],
+  crateEvery: 0,
+  setup() {
+    const F = G.track.finish, B = G.za_ban = { mx: F - 760, t: 1, arm: 0 };
+    for (let x = 800; x < F - 300; x += rand(380, 620)) { const gy = groundY(x); if (gy != null) { const it = spawnItem('za_peel', x, gy - 16, 0, 0, null); it.life = 1e9; } }
+    B.my = (groundY(B.mx) ?? 400) - 190;
+  },
+  tick(dt) {
+    za_level(dt);
+    const B = G.za_ban;
+    // endless peels: a new one 0.7 seconds after you drop one
+    for (const c of cars) {
+      if (!za_seated(c)) continue;
+      if (c.za_had === 'za_peel' && !c.item) {
+        const a = carAng(c), v = carVel(c);
+        za_peelDrop(c, carX(c) - Math.cos(a) * (c.V.base / 2 + 26), carY(c) - 26, v.x * .2 - 50);
+        c.za_ref = G.liveT + .7;
+      }
+      if (!c.item && G.liveT >= (c.za_ref || 0)) c.item = 'za_peel';
+      c.za_had = c.item;
+    }
+    // the monkey in the palm tree near the finish throws peels at whoever is coming
+    B.arm -= dt;
+    const near = cars.filter(c => za_seated(c) && carX(c) > B.mx - 1100 && carX(c) < B.mx + 120);
+    if (near.length && (B.t -= dt) <= 0) {
+      B.t = rand(.8, 1.4); B.arm = .3;
+      const c = near.reduce((a, b) => carX(b) > carX(a) ? b : a);
+      za_throwPeel(B.mx - 20, B.my, Math.min(carX(c) + rand(160, 420), G.track.finish - 40), -1);
+      pop(pick(['OOK!', 'EEK!', 'CATCH!', 'OOK OOK!']), B.mx, B.my - 50, '#ffd400', 18); sfx.whoosh();
+    }
+  },
+  draw(layer) {
+    const B = G.za_ban; if (!B || layer !== 'back') return;
+    const gy = groundY(B.mx + 40) ?? B.my + 190, x = B.mx + 40;
+    // a palm tree with a cheeky monkey in it
+    ctx.strokeStyle = INK; ctx.lineWidth = 4; ctx.fillStyle = '#a56a36';
+    ctx.beginPath(); ctx.moveTo(x - 12, gy + 6); ctx.quadraticCurveTo(x - 4, gy - 100, x - 22, B.my + 10); ctx.lineTo(x - 6, B.my + 10); ctx.quadraticCurveTo(x + 10, gy - 100, x + 12, gy + 6); ctx.closePath(); ctx.fill(); ctx.stroke();
+    for (const a of [-2.6, -2, -1.2, -.5, .1]) { ctx.save(); ctx.translate(x - 14, B.my + 6); ctx.rotate(a); ctx.fillStyle = '#3ccf8e'; ctx.beginPath(); ctx.ellipse(40, 0, 44, 12, 0, 0, 7); ctx.fill(); ctx.stroke(); ctx.restore(); }
+    const mx = B.mx - 20, my = B.my;
+    circle(mx, my + 12, 15, INK); circle(mx, my + 12, 12.5, '#7a4d2a');
+    circle(mx - 13, my - 6, 7, INK); circle(mx + 13, my - 6, 7, INK); circle(mx - 13, my - 6, 5, '#ecc79c'); circle(mx + 13, my - 6, 5, '#ecc79c');
+    circle(mx, my - 4, 14, INK); circle(mx, my - 4, 11.5, '#7a4d2a'); ctx.fillStyle = '#ecc79c'; ctx.beginPath(); ctx.ellipse(mx, my, 8, 6, 0, 0, 7); ctx.fill();
+    circle(mx - 4, my - 7, 2, INK); circle(mx + 4, my - 7, 2, INK);
+    ctx.strokeStyle = INK; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(mx, my + 1, 3, .2, Math.PI - .2); ctx.stroke();
+    ctx.strokeStyle = '#7a4d2a'; ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(mx - 10, my + 10); ctx.lineTo(mx - 20, B.arm > 0 ? my - 22 : my + 20); ctx.stroke();
+    if (B.arm <= 0) { ctx.save(); ctx.translate(mx - 22, my + 20); drawSprite(ctx, 'banana', 0, 16); ctx.restore(); }
+  },
+  cpu(r, c) {
+    // hop over peels lying in the road ahead (most of the time)
+    for (const it of items) {
+      if (it.kind !== 'za_peel' || it.age < .3) continue;
+      const d = it.p.x - carX(c);
+      if (d > 40 && d < 60 + Math.max(0, carVel(c).x) * .12 && Math.abs(it.p.y - carY(c)) < 60 && c.za_hopFor !== it) { c.za_hopFor = it; if (Math.random() < .55) carHop(c); }
+    }
+    return za_cpuDir(c, c.cpuK);
+  },
+});
+function za_peelDrop(c, x, y, vx) {
+  spawnItem('za_peel', x, y, vx, -140, c.team);
+  pop('PEEL!', x, y - 30, tc(c.team), 16); sfx.slip();
+}
+
+// ================= 3. Cow-tapult =================
+const ZA_CT = { P: 760, L: 290, H: 52, Y: 430, drive: 6.5 };
+function za_ctPlank(S) {
+  const th = S.tilt * S.th0, cy = ZA_CT.Y - ZA_CT.H, s = S.seg;
+  s.x1 = ZA_CT.P - ZA_CT.L * Math.cos(th); s.y1 = cy + ZA_CT.L * Math.sin(th);
+  s.x2 = ZA_CT.P + ZA_CT.L * Math.cos(th); s.y2 = cy - ZA_CT.L * Math.sin(th);
+}
+const za_onPlank = (c, S) => carX(c) > S.seg.x1 - 10 && carX(c) < S.seg.x2 + 10 && carY(c) < ZA_CT.Y - 8;
+// one car on the seesaw at a time: clear the field and bring out whoever's turn it is
+function za_ctReset(S) {
+  for (const c of cars.slice()) { if (c.driver) removeRag(c.driver); removeCar(c); }
+  for (const r of rags.slice()) if (r.team < 2) removeRag(r);
+  for (const tm of TEAMS) tm.active = [];
+  G.respawn = [null, null];
+  S.turn = G.teams[(S.n - 1) % G.teams.length];
+  spawnPlayer(S.turn);
+}
+MINIS.push({
+  id: 'za_cowtapult', rank: 3, engine: 'race', name: 'Cow-tapult', icon: 'xb_seesaw',
+  rules: 'score', time: 150, soloGoal: 200, scoreLabel: 'm', noCatch: true, noPunch: true,
+  howto: 'Drive up the seesaw and let go of the gas near the tip. A cow lands on the other end: FLY! Take turns; best total of 3 launches wins.',
+  blurb: 'Park on one end of a giant seesaw. A cow drops on the other end.',
+  deco: 'farm', sky: ['#62b8ff', '#e0f4ff'], ground: ['#86cc6e', '#4f9a3c'],
+  track: [['flat', 2400], ['flat', 2400], ['flat', 900]], startY: 430, crateEvery: 0,
+  setup() {
+    G.catchT = 1e9;
+    const S = G.za_ct = { phase: 'drive', t: 0, n: 1, tilt: 1, tiltTo: 1, th0: Math.asin((ZA_CT.H + 2) / ZA_CT.L), marks: [], res: [], count: 3 * G.teams.length };
+    za_ctReset(S);
+    S.seg = { x1: 0, y1: 0, x2: 0, y2: 0, r: 9, ground: true, za_plank: true };
+    za_ctPlank(S); addSeg(S.seg);
+    S.hay = [];
+    for (const [x, w] of [[1500, 150], [2000, 160], [2550, 170], [3150, 170], [3800, 180]]) {
+      const s = { x1: x, y1: ZA_CT.Y - 12, x2: x + w, y2: ZA_CT.Y - 12, r: 14, ground: true, bounce: .92, slide: .998, za_hay: true };
+      addSeg(s); S.hay.push(s);
+    }
+  },
+  tick(dt) {
+    za_level(dt);
+    const S = G.za_ct, tip = ZA_CT.P + ZA_CT.L; G.catchT = 1e9;
+    S.t += dt;
+    S.tilt += clamp(S.tiltTo - S.tilt, -dt * 6, dt * 6); za_ctPlank(S);
+    if (S.phase === 'drive') {
+      for (const c of cars) {
+        if (!za_seated(c)) continue;
+        if (isCpu(c.team)) c.za_dir = za_ctCpu(c);   // decide every frame, even while bouncing over the pivot
+        if (S.tiltTo > 0 && carX(c) > ZA_CT.P + 10 && za_onPlank(c, S)) { S.tiltTo = -1; pop('CLONK!', ZA_CT.P, ZA_CT.Y - 120, '#ffffff', 22); sfx.clong(); }
+        // let go of the gas on the plank and the car parks itself
+        if (za_onPlank(c, S) && za_dirOf(c) === 0) for (const p of c.list) { const v = vel(p); setVel(p, Math.abs(v.x) < 50 ? 0 : v.x * .75, v.y); }
+        if (!c.za_over && carX(c) > tip + 30) { c.za_over = true; pop('TOO FAR!', carX(c), carY(c) - 80, tc(c.team), 22); }
+      }
+      if (S.t >= ZA_CT.drive - 3 && Math.ceil(ZA_CT.drive - S.t) !== S.cd) { S.cd = Math.ceil(ZA_CT.drive - S.t); if (S.cd > 0) sfx.tick(); }
+      if (S.t >= ZA_CT.drive) {
+        // the cow lands
+        S.phase = 'fly'; S.t = 0;
+        const flip = S.tilt < 0;
+        S.tilt = S.tiltTo = 1; za_ctPlank(S);
+        pop('MOOOO!', S.seg.x1, ZA_CT.Y - 140, '#ffffff', 34); sfx.moo(); sfx.slam(1.2); shake(10); puffs(S.seg.x1, ZA_CT.Y - 10, 14, '#c9a36b');
+        for (const c of cars) {
+          c.za_launch = null;
+          if (!za_seated(c)) continue;
+          if (flip && !c.za_over && za_onPlank(c, S) && carX(c) > ZA_CT.P) {
+            const k = clamp((carX(c) - ZA_CT.P) / ZA_CT.L, 0, 1);
+            // the plank just snapped up under it: lift the car back on top, then fling it
+            const sg = S.seg, py = x => sg.y1 + (sg.y2 - sg.y1) * (x - sg.x1) / (sg.x2 - sg.x1);
+            const lift = Math.max(0, ...[c.wA, c.wB].map(w => w.y - (py(w.x) - sg.r - c.V.wr - 3)));
+            moveBody(c.list, 0, -lift); moveBody(c.driver.list, 0, -lift);
+            za_vel(c, 330 + 640 * k, -(560 + 560 * k));
+            c.za_launch = { k, t: 0 };
+            pop(k > .85 ? 'MEGA LAUNCH!' : k > .6 ? 'WHEEE!' : 'boing', carX(c), carY(c) - 90, tc(c.team), 18 + k * 12);
+          } else if (!c.za_over) pop(flip && za_onPlank(c, S) ? 'WRONG END!' : flip ? 'MISSED IT!' : 'TOO SLOW!', carX(c), carY(c) - 80, tc(c.team), 20);
+        }
+        if (!flip) pop('NOBODY ON THE SEESAW!', ZA_CT.P, ZA_CT.Y - 200, '#ffffff', 22);
+      }
+    } else if (S.phase === 'fly') {
+      G.respawn = [null, null];
+      let busy = false;
+      for (const c of cars) {
+        const L = c.za_launch; if (!L || L.end != null) continue;
+        L.t += dt;
+        const v = carVel(c), onGround = [c.wA, c.wB, c.bA, c.bB].some(p => p.supT < 3 && p.onSeg && !p.onSeg.za_hay && !p.onSeg.za_plank);
+        if (L.t > .5 && onGround) { L.landed = true; c.done = true; }
+        L.rest = Math.hypot(v.x, v.y) < 40 && L.t > .6 ? (L.rest || 0) + dt : 0;
+        if ((L.landed && L.rest > .4) || L.t > 9 || (!c.driver && L.rest > .4)) L.end = carX(c);
+        else busy = true;
+      }
+      if (!busy || S.t > 10) {
+        S.phase = 'show'; S.t = 0;
+        for (const t of [S.turn]) {
+          const c = cars.find(o => o.team === t), L = c && c.za_launch;
+          const x = L ? (L.end ?? carX(c)) : null, m = x == null ? 0 : Math.max(0, Math.round((x - tip) / 20));
+          S.res.push([t, m]);
+          if (m > 0) { miniPoint(t, m, x, ZA_CT.Y - 160); S.marks.push({ x, t, m }); }
+          else pop(nameOf(t) + ': 0 m', c ? carX(c) : ZA_CT.P, ZA_CT.Y - 150, tc(t), 20);
+        }
+      }
+    } else if (S.phase === 'show') {
+      G.respawn = [null, null];
+      if (S.t > 2.2) {
+        if (S.n >= S.count) {
+          const solo = G.teams.length === 1, [a, b] = G.rscore;
+          endRound(solo ? null : a > b ? 0 : b > a ? 1 : null, { time: G.liveT });
+          return;
+        }
+        S.n++; S.phase = 'drive'; S.t = 0; S.tilt = S.tiltTo = 1; S.cd = 0; za_ctPlank(S);
+        za_ctReset(S);
+        G.toast = { text: G.teams.length > 1 ? `${nameOf(S.turn)}'s turn` : `LAUNCH ${S.n} of ${S.count}`, color: tc(S.turn), t: 0, dur: 1.4 };
+      }
+    }
+  },
+  draw(layer) {
+    const S = G.za_ct; if (!S) return;
+    const tip = ZA_CT.P + ZA_CT.L, Y = ZA_CT.Y;
+    if (layer === 'back') {
+      // distance signs from the tip of the seesaw
+      for (let m = 10; m <= 200; m += 10) {
+        const x = tip + m * 20; if (x < G.cam.x - 60 || x > za_viewR() + 60) continue;
+        ctx.strokeStyle = INK; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(x, Y); ctx.lineTo(x, Y - 46); ctx.stroke();
+        ctx.fillStyle = m % 50 ? '#ffffff' : '#ffd23f'; roundRect(x - 22, Y - 66, 44, 22, 5); ctx.fill(); ctx.stroke();
+        ctx.font = Math.round(13 * FDK) + 'px ' + FD; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = INK; ctx.fillText(m + 'm', x, Y - 55);
+      }
+      for (const k of S.marks) { ctx.strokeStyle = INK; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(k.x, Y); ctx.lineTo(k.x, Y - 80); ctx.stroke(); ctx.fillStyle = tc(k.t); tri(k.x, Y - 80, k.x + 26, Y - 70, k.x, Y - 60); }
+      // hay bales
+      for (const s of S.hay) {
+        ctx.fillStyle = '#ffd93b'; ctx.strokeStyle = INK; ctx.lineWidth = 3; roundRect(s.x1 - 12, Y - 28, s.x2 - s.x1 + 24, 30, 8); ctx.fill(); ctx.stroke();
+        ctx.strokeStyle = '#e09a00'; ctx.lineWidth = 2;
+        for (let x = s.x1; x < s.x2 + 8; x += 14) { ctx.beginPath(); ctx.moveTo(x, Y - 24); ctx.lineTo(x + 6, Y - 4); ctx.stroke(); }
+        za_word('BOING', (s.x1 + s.x2) / 2, Y - 42, 11, '#ffd93b');
+      }
+      // the fulcrum and the plank
+      ctx.fillStyle = '#9e1b1b'; ctx.strokeStyle = INK; ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.moveTo(ZA_CT.P - 34, Y + 4); ctx.lineTo(ZA_CT.P + 34, Y + 4); ctx.lineTo(ZA_CT.P, Y - ZA_CT.H); ctx.closePath(); ctx.fill(); ctx.stroke();
+      const s = S.seg;
+      ctx.lineCap = 'round'; ctx.strokeStyle = INK; ctx.lineWidth = 22; ctx.beginPath(); ctx.moveTo(s.x1, s.y1); ctx.lineTo(s.x2, s.y2); ctx.stroke();
+      ctx.strokeStyle = '#c4884f'; ctx.lineWidth = 15; ctx.stroke();
+      ctx.strokeStyle = '#7a4d2a'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(s.x1 + 10, s.y1 + 1); ctx.lineTo(s.x2 - 10, s.y2 + 1); ctx.stroke();
+      circle(ZA_CT.P, Y - ZA_CT.H, 7, INK); circle(ZA_CT.P, Y - ZA_CT.H, 4, '#ffd23f');
+      // the cow: falling, then sitting on the end
+      const cx = s.x1 + 30;
+      if (S.phase === 'drive' && S.t > ZA_CT.drive - 1.6) {
+        const k = clamp((S.t - (ZA_CT.drive - 1.6)) / 1.6, 0, 1), cy = s.y1 - 40 - 700 * (1 - k * k);
+        ctx.globalAlpha = .2 + .4 * k; ctx.fillStyle = INK; ctx.beginPath(); ctx.ellipse(cx, s.y1 - 8, 26 + 14 * k, 6, 0, 0, 7); ctx.fill(); ctx.globalAlpha = 1;
+        ctx.save(); ctx.translate(cx, cy); ctx.rotate(Math.sin(G.t * 9) * .3); drawSprite(ctx, 'cow', 0, 76); ctx.restore();
+      } else if (S.phase !== 'drive') { ctx.save(); ctx.translate(cx, s.y1 - 36); ctx.rotate(-S.th0); drawSprite(ctx, 'cow', 0, 76); ctx.restore(); }
+    }
+    if (layer === 'front') za_onScreen(() => {
+      const per = G.teams.length, k = Math.ceil(S.n / per);
+      za_word(per > 1 ? `${nameOf(S.turn)}: launch ${k} / 3` : `LAUNCH ${k} / 3`, 130, 70, 18, tc(S.turn));
+      if (S.phase === 'drive') {
+        const left = ZA_CT.drive - S.t;
+        if (left <= 3) za_word(left > 0 ? String(Math.ceil(left)) : 'MOO!', W / 2, 150, 54, '#ffd23f');
+        else za_word('Stop near the tip!', W / 2, 150, 22, '#ffffff');
+      }
+    });
+  },
+  cpu(r, c) { return za_cpuDir(c, za_ctCpu(c)); },
+});
+// the computer drives to a spot on the plank and lets go a little early (the car rolls on a bit after the gas comes off)
+function za_ctCpu(c) {
+  const S = G.za_ct;
+  if (S.phase !== 'drive' || c.za_over) return 0;
+  if (c.za_k == null) c.za_k = rand(.55, .95);
+  const stop = Math.max(ZA_CT.P + 60, ZA_CT.P + ZA_CT.L * c.za_k - Math.max(0, carVel(c).x) * .1);
+  return carX(c) < stop ? 1 : 0;
+}
+
+// ================= 4. Trampoline Highway =================
+MINIS.push({
+  id: 'za_tramphwy', rank: 4, engine: 'race', name: 'Trampoline Highway', icon: 'xr_spring',
+  rules: 'race', goal: 1, time: 120, vs: true, noPunch: true,
+  howto: 'The road has huge gaps! Drop onto the trampolines to BOING across. Lean to land on your wheels.',
+  blurb: 'The road has huge gaps, and the only way across is bouncing on trampolines.',
+  deco: 'desert', sky: ['#ff9a5a', '#ffe0a8'], ground: ['#c98a40', '#8a5a2a'], edge: '#ffe0a8',
+  track: [['flat', 600], ['check'],
+    ['slope', 160, 110], ['tramp', 250], ['step', 0, -170], ['flat', 420], ['check'],
+    ['slope', 160, 120], ['tramp', 250], ['step', 0, -190], ['flat', 360], ['bumps', 240, 2, 14], ['check'],
+    ['slope', 200, 140], ['tramp', 260], ['step', 0, -150], ['flat', 320], ['check'],
+    ['tramp', 250], ['flat', 340], ['check'],
+    ['slope', 160, 100], ['tramp', 250], ['step', 0, -200], ['flat', 420], ['check'],
+    ['slope', 180, 130], ['tramp', 260], ['step', 0, -180], ['flat', 400], ['bumps', 300, 3, 14], ['check'],
+    ['slope', 160, 120], ['tramp', 250], ['step', 0, -120], ['flat', 300], ['check'],
+    ['slope', 200, 150], ['tramp', 270], ['step', 0, -210], ['flat', 600], ['finish'], ['flat', 200]],
+  crateEvery: 0,
+  tick(dt) {
+    za_level(dt);
+    // trampolines throw cars up and forward, nice and level
+    for (const c of cars) {
+      if (!za_seated(c) || (c.za_b || 0) > G.t) continue;
+      if (c.wA.bedT < 3 || c.wB.bedT < 3) {
+        const v = carVel(c);
+        c.za_b = G.t + .45;
+        za_vel(c, clamp(v.x, 340, 640), -900);
+        pop(pick(['BOING!', 'BOINNNG!', 'SPROING!', 'WHEE!']), carX(c), carY(c) - 60, tc(c.team), 22); sfx.boing(1);
+      }
+    }
+  },
+});
+
+// ================= 5. Flush Rush =================
+const ZA_FL = { H: 770, x1: 40, x2: 1500, X: [560, 980] };
+MINIS.push({
+  id: 'za_flush', rank: 5, engine: 'race', name: 'Flush Rush', icon: 'za_toilet',
+  rules: 'ko', goal: 3, time: 100, vs: true, heatTime: 45, noPunch: true, noCatch: true,
+  howto: 'When the chain is pulled the drain opens and everything swirls toward it. Drive away from the swirl and bump the other car in! First to 3.',
+  blurb: 'A sumo arena in a giant toilet bowl, and every few seconds someone pulls the chain.',
+  deco: 'snow', sky: ['#9fdcff', '#f2fbff'], ground: ['#ffffff', '#c9d6e6'], edge: '#6ad1ff',
+  track: [['flat', 160], ['slope', 340, 250], ['flat', 210], ['gap', 120], ['flat', 210], ['slope', 340, -250], ['flat', 160],
+    ['step', 0, -600], ['flat', 100], ['finish']],
+  startY: 230, crateEvery: 0,
+  setup() {
+    G.catchT = 1e9;
+    G.za_fl = { next: 11, on: 0, swirl: 0, warn: 0 };
+    // a grate over the drain that only opens when it flushes
+    G.za_fl.lid = { x1: 704, y1: 480, x2: 836, y2: 480, r: 10, ground: true };
+    addSeg(G.za_fl.lid);
+    za_homes(ZA_FL.X);
+    za_frame(ZA_FL.x1, ZA_FL.x2, 400);
+  },
+  tick(dt) {
+    za_level(dt);
+    const F = G.za_fl, H0 = ZA_FL.H;
+    za_frame(ZA_FL.x1, ZA_FL.x2, 400); za_homes(ZA_FL.X);
+    F.swirl += dt * (F.on > 0 ? 9 : 1.2);
+    if (F.on <= 0 && G.liveT >= F.next - 1.5 && !F.warn) { F.warn = 1; pop('*clink*', 360, 80, '#ffffff', 18); sfx.clang(); }
+    if (F.on <= 0 && G.liveT >= F.next) {
+      F.on = 3.6 + G.heat * .4; F.warn = 0; F.lid.off = true;
+      pop('FLUSH!', H0, 200, '#5fe8ff', 44); sfx.slurp(); sfx.blow(); shake(6);
+      G.raceZones.push({ k: 'oil', x1: 200, x2: 1340, t: F.on });
+    }
+    if (F.on > 0) {
+      F.on -= dt;
+      if (F.on <= 0) { F.next = G.liveT + rand(11, 15) / (1 + G.heat * .35); F.lid.off = false; pop('*clunk*', H0, 420, '#ffffff', 16); }
+      // the swirl drags everything toward the drain
+      const pull = 420 + 480 * G.heat;
+      for (const c of cars) { const k = Math.sign(H0 - carX(c)) * pull * dt; for (const p of c.list) addVel(p, k, 0); }
+      for (const r of rags) if (!r.seat) { const k = Math.sign(H0 - r.p.pelvis.x) * pull * dt; for (const p of r.list) addVel(p, k, 0); }
+    }
+    za_arena(dt, 450, 60, 1480);
+  },
+  draw(layer) {
+    const F = G.za_fl; if (!F) return;
+    if (layer === 'back') za_frame(ZA_FL.x1, ZA_FL.x2, 400);   // keep the arena framed in the intro and between rounds too
+    const H0 = ZA_FL.H;
+    if (layer === 'back') {
+      // water in the drain, swirling when it flushes
+      ctx.fillStyle = '#6ad1ff'; ctx.strokeStyle = INK; ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.ellipse(H0, 600, 70, 110, 0, 0, 7); ctx.fill();
+      if (!F.lid.off) { ctx.strokeStyle = INK; ctx.lineWidth = 5; ctx.fillStyle = '#9aa3b8'; roundRect(F.lid.x1 - 4, F.lid.y1 - 10, F.lid.x2 - F.lid.x1 + 8, 14, 6); ctx.fill(); ctx.stroke(); ctx.lineWidth = 3; for (let x = F.lid.x1 + 14; x < F.lid.x2; x += 18) { ctx.beginPath(); ctx.moveTo(x, F.lid.y1 - 9); ctx.lineTo(x, F.lid.y1 + 3); ctx.stroke(); } }
+      ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 3;
+      for (let i = 0; i < 4; i++) { ctx.beginPath(); ctx.ellipse(H0, 540 + i * 26, 50 - i * 9, 12 - i * 2, 0, F.swirl + i, F.swirl + i + 3.6); ctx.stroke(); }
+      // the tank and the chain handle
+      const pull = F.on > 0 ? 1 : F.warn ? .5 : 0;
+      ctx.save(); ctx.translate(310, -40);
+      ctx.fillStyle = '#ffffff'; ctx.strokeStyle = INK; ctx.lineWidth = 4; roundRect(-200, -50, 220, 200, 18); ctx.fill(); ctx.stroke();
+      roundRect(-214, -66, 248, 24, 10); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#6ad1ff'; roundRect(-180, 70, 180, 60, 10); ctx.fill(); ctx.stroke();
+      ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 3; for (let i = 0; i < 3; i++) { ctx.beginPath(); ctx.arc(-120 + i * 50, 100 + Math.sin(G.t * 3 + i) * 4, 10, Math.PI * 1.1, Math.PI * 1.9); ctx.stroke(); }
+      ctx.strokeStyle = INK; ctx.lineWidth = 4;
+      za_word('FLUSH-O-MATIC', -90, 20, 18, '#2f6fe0');
+      ctx.fillStyle = '#c9c7d6'; roundRect(-6, 30 + pull * 20, 64, 14, 6); ctx.fill(); ctx.stroke();
+      ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(52, 44 + pull * 20); ctx.lineTo(52, 120 + pull * 30); ctx.stroke(); circle(52, 126 + pull * 30, 9, INK); circle(52, 126 + pull * 30, 6, '#ffd23f');
+      ctx.restore();
+      za_drawCushion(60, 230, 1); za_drawCushion(1480, 230, -1);
+    }
+    if (layer === 'front') {
+      if (F.on > 0) {
+        ctx.strokeStyle = 'rgba(95,232,255,.75)'; ctx.lineWidth = 5;
+        for (let i = 0; i < 6; i++) { const a = F.swirl * (1 + i * .15) + i; ctx.beginPath(); ctx.ellipse(H0, 470, 120 + i * 90, 30 + i * 10, 0, a, a + 1.4); ctx.stroke(); }
+      }
+      za_onScreen(() => {
+        if (F.on <= 0 && G.phase === 'live') { const s = Math.ceil(F.next - G.liveT); if (s <= 3 && s > 0) za_word('FLUSH IN ' + s, W / 2, 120, 26, '#5fe8ff'); }
+      });
+    }
+  },
+  cpu(r, c) {
+    const F = G.za_fl, H0 = ZA_FL.H, x = carX(c), side = x < H0 ? -1 : 1, o = cars.find(k => k !== c && za_seated(k));
+    if (F.on > 0) { c.za_ph = null; return za_cpuDir(c, side); }   // fight the swirl
+    if (!o) return za_cpuDir(c, side * .3);
+    const ox = carX(o), same = (ox < H0) === (x < H0);
+    if (same) {
+      c.za_ph = null;
+      // they're between me and the drain: shove! otherwise get around behind them
+      if (Math.abs(ox - H0) < Math.abs(x - H0)) {
+        if (Math.abs(x - ox) < 190 && Math.random() < .02) honk(c);
+        return za_cpuDir(c, Math.sign(ox - x));
+      }
+      return za_cpuDir(c, Math.abs(x - H0) < 150 ? side : -side * .6);
+    }
+    // they're across the drain: back up my side, then charge and jump it
+    if (!c.za_ph) c.za_ph = { k: 'back', t: 0 };
+    c.za_ph.t += 1 / 60;
+    if (c.za_ph.k === 'back' && (Math.abs(x - H0) > 470 || c.za_ph.t > 2.2)) c.za_ph = { k: 'go', t: 0 };
+    if (c.za_ph.k === 'go' && c.za_ph.t > 2.5) c.za_ph = { k: 'back', t: 0 };
+    return za_cpuDir(c, c.za_ph.k === 'back' ? side : -side);
+  },
+});
+
+// ================= 6. Hot Potato Truck =================
+const ZA_HP = { x1: -290, x2: 1090, X: [-60, 860] };
+MINIS.push({
+  id: 'za_potato', rank: 6, engine: 'race', name: 'Hot Potato Truck', icon: 'bomb',
+  rules: 'ko', goal: 3, time: 100, vs: true, noPunch: true, noCatch: true,
+  howto: 'A ticking bomb sits on one car. Bump into the other car to pass it on before it goes POP! First to 3 pops wins.',
+  blurb: 'A ticking bomb sits on one car\'s roof. Bump someone to pass it on.',
+  deco: 'candy', sky: ['#ff9ed2', '#ffe3f2'], ground: ['#c4884f', '#7a4d2a'], edge: '#ffd23f',
+  track: [['flat', 1050], ['step', 0, -600], ['flat', 100], ['finish']],
+  startY: 430, crateEvery: 0,
+  setup() {
+    G.catchT = 1e9;
+    za_homes(ZA_HP.X);
+    G.za_hp = { holder: pick(G.teams), t: rand(13, 17), cd: 0, tick: 1, hop: 0, from: null, done: false, wait: 0 };
+    za_frame(ZA_HP.x1, ZA_HP.x2, 380);
+  },
+  tick(dt) {
+    za_level(dt);
+    const P = G.za_hp; za_frame(ZA_HP.x1, ZA_HP.x2, 380);
+    za_homes(ZA_HP.X); za_arena(dt, 430, -200, 1010);
+    if (P.done) {
+      // a new bomb after a short breather
+      if ((P.wait -= dt) <= 0 && G.teams.every(t => za_car(t))) {
+        Object.assign(P, { holder: pick(G.teams), t: rand(10, 14), cd: 1, tick: 1, hop: 0, from: null, done: false });
+        const c = za_car(P.holder); pop('NEW BOMB!', carX(c), carY(c) - 120, tc(P.holder), 24); sfx.fuse();
+      }
+      return;
+    }
+    const a = za_car(P.holder), others = G.teams.filter(t => t !== P.holder), b = others.length ? za_car(others[0]) : null;
+    if (!a) return;   // the holder is getting a new car: the bomb waits for them
+    P.t -= dt; P.cd -= dt; P.hop -= dt;
+    if (b && P.cd <= 0 && Math.abs(carX(a) - carX(b)) < (a.V.base + b.V.base) / 2 + 28 && Math.abs(carY(a) - carY(b)) < 70) {
+      P.from = za_bombPos(a); P.holder = b.team; P.cd = 1; P.hop = .35;
+      pop(pick(['TAG!', 'PASS!', 'YOURS!', 'NO TAKE-BACKS!']), (carX(a) + carX(b)) / 2, carY(a) - 110, tc(b.team), 26); sfx.kick();
+    }
+    if ((P.tick -= dt) <= 0) { P.tick = P.t < 3 ? .25 : P.t < 6 ? .5 : 1; sfx.tick(); }
+    if (P.t <= 0) {
+      const c = za_car(P.holder);
+      P.done = true; P.wait = 2.5;
+      if (c) {
+        const r = c.driver, x = carX(c), y = carY(c) - 60;
+        ejectDriver(c, 'POP!');
+        pushBody(r, rand(-120, 120), -900);
+        for (const p of c.list) addVel(p, 0, -380);
+        za_confetti(x, y, 9); sfx.boom(); shake(14); burst(x, y, 2);
+        pop('KA-POP!', x, y - 60, '#ff4fd8', 40);
+      }
+    }
+  },
+  draw(layer) {
+    if (layer === 'back') { za_frame(ZA_HP.x1, ZA_HP.x2, 380); za_drawCushion(-200, 430, 1); za_drawCushion(1010, 430, -1); }
+    const P = G.za_hp; if (!P || P.done || layer !== 'front') return;
+    const c = za_car(P.holder); if (!c) return;
+    let { x, y } = za_bombPos(c);
+    if (P.hop > 0 && P.from) { const k = 1 - P.hop / .35; x = P.from.x + (x - P.from.x) * k; y = P.from.y + (y - P.from.y) * k - Math.sin(k * Math.PI) * 80; }
+    const hot = P.t < 3;
+    if (hot && Math.sin(G.t * 30) > 0) circle(x, y, 26, 'rgba(255,60,40,.5)');
+    ctx.save(); ctx.translate(x, y); ctx.scale(1 + (hot ? .1 * Math.sin(G.t * 25) : 0), 1); drawSprite(ctx, 'bomb', 0, 40); ctx.restore();
+    for (let i = 0; i < 3; i++) circle(x + 9 + rand(-3, 3), y - 18 + rand(-3, 3), rand(1.5, 3.5), pick(['#ffd400', '#ff7a00', '#fff']));
+    if (P.t < 6) za_word(String(Math.max(1, Math.ceil(P.t))), x, y - 44, 26, hot ? '#ff3b3b' : '#ffffff');
+  },
+  cpu(r, c) {
+    const P = G.za_hp, o = cars.find(k => k !== c && za_seated(k));
+    if (!o || P.done) return za_cpuDir(c, 0);
+    const dx = carX(o) - carX(c);
+    if (P.holder === c.team) {
+      // chase them down, with a hop now and then to get over the slopes
+      if (Math.abs(dx) < 160 && Math.random() < .01) carHop(c);
+      return za_cpuDir(c, Math.sign(dx) || 1);
+    }
+    // run away; cornered? try hopping over
+    const x = carX(c), corner = x < -100 || x > 900;
+    if (corner && Math.abs(dx) < 240 && Math.random() < .05) carHop(c);
+    if (corner && Math.abs(dx) < 240 && Math.random() < .3) return za_cpuDir(c, Math.sign(dx) || 1);
+    return za_cpuDir(c, -Math.sign(dx) || 1);
+  },
+});
+function za_bombPos(c) { const s = seatOf(c); return { x: s.x + s.ux * 78, y: s.y + s.uy * 78 }; }
+
+// ================= 7. King of the Hump =================
+const ZA_HU = { F: 680, top: 280, X: [60, 1260] };
+MINIS.push({
+  id: 'za_hump', rank: 7, engine: 'race', name: 'King of the Hump', icon: 'crown',
+  rules: 'score', goal: 15, time: 75, vs: true, noPunch: true, noCatch: true, scoreLabel: 'sec',
+  howto: 'Let go of the gas by the flag on top of the hill to park and score. Ram and honk (punch) to knock the king into the mud!',
+  blurb: 'One big hill. Park on top to score. Everybody else wants that spot.',
+  deco: 'farm', sky: ['#62b8ff', '#d8f1ff'], ground: ['#7cc46a', '#4f9a3c'],
+  track: [['mud', 230], ['hill', 900, 150], ['mud', 230], ['step', 0, -600], ['flat', 100], ['finish']],
+  startY: 430, crateEvery: 0,
+  setup() {
+    G.catchT = 1e9;
+    G.za_hu = { acc: 0, king: -1 };
+    za_homes(ZA_HU.X);
+    za_frame(-190, 1400, 380);
+  },
+  tick(dt) {
+    za_level(dt);
+    const K = G.za_hu; za_frame(-190, 1400, 380);
+    za_homes(ZA_HU.X);
+    za_arena(dt, 520, -190, 1320);
+    // let go of the gas near the flag and the car stays put (the top is round)
+    for (const c of cars) if (za_seated(c) && Math.abs(carX(c) - ZA_HU.F) < 150 && carY(c) < ZA_HU.top + 30 && za_dirOf(c) === 0 && carGround(c)) for (const p of c.list) { const v = vel(p); setVel(p, Math.abs(v.x) < 40 ? 0 : v.x * .82, v.y); }
+    const on = G.teams.filter(t => { const c = za_car(t); return c && Math.abs(carX(c) - ZA_HU.F) < 125 && carY(c) < ZA_HU.top + 30; });
+    K.king = on.length === 1 ? on[0] : -1;
+    K.acc += dt;
+    if (K.acc >= 1) {
+      K.acc -= 1;
+      if (on.length === 1) miniPoint(on[0], 1, ZA_HU.F, ZA_HU.top - 120);
+      else if (on.length > 1) pop(pick(['SHOVE!', 'MY HILL!', 'NO, MINE!']), ZA_HU.F, ZA_HU.top - 120, '#ffffff', 22);
+    }
+  },
+  draw(layer) {
+    const K = G.za_hu; if (!K) return;
+    if (layer === 'back') {
+      za_frame(-190, 1400, 380);
+      za_drawCushion(-190, 430, 1); za_drawCushion(1320, 430, -1);
+      const x = ZA_HU.F, y = ZA_HU.top;
+      ctx.strokeStyle = INK; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(x, y + 2); ctx.lineTo(x, y - 120); ctx.stroke();
+      const wave = Math.sin(G.t * 5) * 5;
+      ctx.fillStyle = K.king >= 0 ? tc(K.king) : '#ffd23f'; ctx.beginPath(); ctx.moveTo(x, y - 120); ctx.quadraticCurveTo(x + 30, y - 112 + wave, x + 56, y - 106); ctx.lineTo(x, y - 86); ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.save(); ctx.translate(x, y - 136); drawSprite(ctx, 'crown', 0, 26); ctx.restore();
+      ctx.globalAlpha = .25; ctx.fillStyle = '#ffd23f'; ctx.fillRect(x - 125, y - 14, 250, 14); ctx.globalAlpha = 1;
+    }
+    if (layer === 'front' && K.king >= 0) {
+      const c = za_car(K.king); if (!c) return;
+      const s = seatOf(c);
+      ctx.save(); ctx.translate(s.x + s.ux * 72, s.y + s.uy * 72 + Math.sin(G.t * 6) * 3); drawSprite(ctx, 'crown', 0, 30); ctx.restore();
+    }
+  },
+  cpu(r, c) {
+    const x = carX(c), dx = ZA_HU.F - x, o = cars.find(k => k !== c && za_seated(k));
+    const top = Math.abs(dx) < 110 && carY(c) < ZA_HU.top + 30;
+    if (top && o && Math.abs(carX(o) - ZA_HU.F) < 160 && carY(o) < ZA_HU.top + 50) {
+      if (Math.abs(carX(o) - x) < 170 && Math.random() < .03) honk(c);
+      return za_cpuDir(c, Math.sign(carX(o) - x) || 1);   // shove the other one off
+    }
+    if (top) return za_cpuDir(c, Math.abs(dx) > 70 ? Math.sign(dx) * .6 : 0);
+    return za_cpuDir(c, Math.sign(dx));
+  },
+});
+
+// ================= 8. Moo-ve Over! =================
+function za_cowCar(c, cow) {
+  // the car rides on the cow's back for a moment
+  const tx = cow.x, ty = cow.y - 26 - c.V.wr, dx = tx - carX(c), dy = ty - carY(c);
+  moveBody(c.list, dx, dy); if (c.driver && c.driver.seat) moveBody(c.driver.list, dx, dy);
+  za_vel(c, cow.v, 0);
+}
+MINIS.push({
+  id: 'za_moo', rank: 8, engine: 'race', name: 'Moo-ve Over!', icon: 'cow',
+  rules: 'race', goal: 1, time: 120, vs: true, noPunch: true,
+  howto: 'A stampede is coming the wrong way! Hop over the cows. Bonk one and you go for a cow ride.',
+  blurb: 'Race across a farm while a stampede of cows thunders down the road toward you.',
+  deco: 'farm', sky: ['#5fb6ff', '#d8f1ff'], ground: ['#b08850', '#7a5a30'], edge: '#e0c890',
+  track: [['flat', 500], ['bumps', 360, 3, 14], ['flat', 400], ['hill', 500, 60], ['flat', 300], ['check'], ['dip', 400, 40], ['flat', 500], ['bumps', 300, 2, 20],
+    ['flat', 300], ['check'], ['hill', 600, 80], ['flat', 400], ['slope', 300, -50], ['flat', 500], ['check'], ['dip', 400, 50], ['flat', 500], ['bumps', 400, 3, 16],
+    ['flat', 400], ['check'], ['hill', 500, 60], ['flat', 600], ['slope', 300, 40], ['flat', 400], ['check'], ['bumps', 400, 3, 16], ['flat', 500], ['hill', 400, 50],
+    ['flat', 600], ['finish'], ['flat', 200]],
+  crateEvery: 0,
+  setup() { G.za_mo = { cows: [], t: 1.2, gt: rand(7, 10) }; },
+  tick(dt) {
+    za_level(dt);
+    const M = G.za_mo, fin = G.track.finish;
+    const xs = cars.filter(za_seated).map(carX);
+    if (!xs.length) return;
+    const lead = Math.max(...xs), last = Math.min(...xs);
+    // the herd comes from just past the right of the screen
+    if ((M.t -= dt) <= 0) {
+      M.t = rand(1.9, 2.9) / (1 + G.heat * .25);
+      const x0 = Math.min(za_viewR() + 120, fin + 300), n = Math.random() < .3 ? 2 : 1, v = -rand(170, 330);
+      for (let i = 0; i < n; i++) M.cows.push({ x: x0 + i * 110, y: 0, v, ph: rand(0, 6), gold: false });
+      if (Math.random() < .5) sfx.moo();
+    }
+    // now and then a golden racing cow thunders up from behind: hitch a ride!
+    if ((M.gt -= dt) <= 0) {
+      M.gt = rand(8, 12);
+      M.cows.push({ x: G.cam.x - 140, y: 0, v: rand(880, 1000), ph: 0, gold: true });
+      pop('GOLDEN COW!', G.cam.x + 120, (groundY(G.cam.x + 120) ?? 400) - 160, '#ffd23f', 24); sfx.magic();
+    }
+    for (const cow of M.cows) {
+      cow.x += cow.v * dt; cow.ph += dt * 14;
+      const gy = groundY(cow.x); if (gy == null) { cow.gone = true; continue; }
+      cow.y = gy - 24 - Math.abs(Math.sin(cow.ph)) * 6;
+      if (cow.x < last - 1400 || cow.x > Math.max(fin + 600, lead + 1600) || (cow.gold && cow.x > za_viewR() + 400 && !cow.rider)) cow.gone = true;
+      if (Math.random() < .15) puffs(cow.x - Math.sign(cow.v) * 30, gy - 4, 1, '#d8c39a');
+      for (const r of rags) if (!r.lost && !r.seat && (r.cowT || 0) < G.t && Math.abs(r.p.pelvis.x - cow.x) < 40 && Math.abs(r.p.pelvis.y - cow.y) < 50) { r.cowT = G.t + .6; pushBody(r, cow.v * 1.2, -420); pop('MOO!', cow.x, cow.y - 40, '#ffffff', 18); }
+    }
+    for (const c of cars) {
+      if (!za_seated(c)) { if (c.za_ride) { c.za_ride.cow.rider = null; c.za_ride = null; } continue; }
+      const R = c.za_ride;
+      if (R) {
+        R.t -= dt;
+        if (R.t <= 0 || R.cow.gone) {
+          za_vel(c, R.cow.gold ? R.cow.v * .75 : 360, -520);
+          R.cow.rider = null; c.za_ride = null; c.za_free = G.t + .9;
+          pop(R.cow.gold ? 'YEE-HAW!' : 'BYE COW!', carX(c), carY(c) - 70, tc(c.team), 20);
+        } else za_cowCar(c, R.cow);
+        continue;
+      }
+      if ((c.za_free || 0) > G.t) continue;
+      for (const cow of M.cows) {
+        if (cow.gone || Math.abs(carX(c) - cow.x) > c.V.base / 2 + 30 || Math.abs(carY(c) - cow.y) > 44) continue;
+        const v = carVel(c);
+        if (v.y > 40 && carY(c) < cow.y - 16) { za_vel(c, Math.max(v.x, 200), -600); c.za_free = G.t + .4; pop('MOO-BOING!', cow.x, cow.y - 50, '#ffffff', 20); sfx.boing(.8); }
+        else if (!cow.rider) { cow.rider = c; c.za_ride = { cow, t: cow.gold ? 1.8 : .9 }; pop(cow.gold ? 'GIDDY-UP!' : pick(['MOO-VE OVER!', 'COW RIDE!', 'WRONG WAY!']), cow.x, cow.y - 70, cow.gold ? '#ffd23f' : '#ffffff', 24); sfx.moo(); }
+        else { za_vel(c, cow.v * .8, -260); c.za_free = G.t + .5; pop('BONK!', cow.x, cow.y - 50, '#ffffff', 20); sfx.kick(); }
+        break;
+      }
+    }
+    M.cows = M.cows.filter(c => !c.gone);
+  },
+  draw(layer) {
+    const M = G.za_mo; if (!M || layer !== 'bed') return;
+    for (const cow of M.cows) {
+      if (cow.x < G.cam.x - 80 || cow.x > za_viewR() + 80) continue;
+      if (cow.gold) { ctx.globalAlpha = .45 + .25 * Math.sin(G.t * 12); circle(cow.x, cow.y, 44, '#ffd23f'); ctx.globalAlpha = 1; }
+      ctx.save(); ctx.translate(cow.x, cow.y); ctx.scale(cow.v < 0 ? -1 : 1, 1); ctx.rotate(Math.sin(cow.ph) * .08);
+      drawSprite(ctx, 'cow', 0, 68); ctx.restore();
+      if (cow.gold) { ctx.save(); ctx.translate(cow.x + 18, cow.y - 34); drawSprite(ctx, 'crown', 0, 18); ctx.restore(); }
+    }
+  },
+  cpu(r, c) {
+    const M = G.za_mo, x = carX(c), v = carVel(c);
+    for (const cow of M.cows) {
+      if (cow.v > 0 || cow.gone) continue;
+      const d = cow.x - x, close = Math.max(100, v.x - cow.v);
+      cow.seen = cow.seen || {};
+      if (d > 0 && d < close * .3 + 50 && !cow.seen[c.team]) { cow.seen[c.team] = true; if (Math.random() < .7) carHop(c); }
+    }
+    return za_cpuDir(c, c.cpuK);
+  },
+});
+
+// ================= 9. Car Wash of Doom =================
+const ZA_CW = {
+  halls: [[950, 4450, 'CAR WASH', 'OF DOOM'], [6050, 9450, 'RINSE CYCLE', '(EXTRA DOOM)'], [11050, 13450, 'WAX & POLISH', '(DOOMIEST)']],
+  brush: [[1500, 1], [1950, -1], [2550, 1], [6800, -1], [7050, 1], [7300, -1], [11700, 1], [11950, -1], [12200, 1], [12450, -1]],
+  foam: [[2700, 3400], [7400, 8300]], dry: [[3700, 4350], [8650, 9300], [12650, 13350]],
+};
+const za_in = (x, list) => list.some(([a, b]) => x > a && x < b);
+MINIS.push({
+  id: 'za_carwash', rank: 9, engine: 'race', name: 'Car Wash of Doom', icon: 'xb_soap',
+  rules: 'race', goal: 1, time: 120, vs: true, noPunch: true,
+  howto: 'Race through the car wash: spinning brushes flip you, foam hides the road and the dryer blows you back.',
+  blurb: 'Race straight through a giant car wash full of spinning brushes and soap.',
+  deco: 'city', sky: ['#6ad1ff', '#d8f4ff'], ground: ['#9aa3b8', '#5a6278'], edge: '#d8f4ff',
+  track: [['flat', 700], ['check'], ['ice', 450], ['flat', 250], ['flat', 500], ['flat', 450], ['check'], ['flat', 400], ['bumps', 600, 5, 16], ['flat', 300], ['check'],
+    ['flat', 700], ['flat', 400], ['flat', 250], ['hill', 400, 60], ['flat', 300], ['check'], ['flat', 300],
+    ['ice', 300], ['flat', 300], ['flat', 400], ['flat', 400], ['check'], ['bumps', 900, 7, 18], ['flat', 300], ['check'], ['flat', 700], ['flat', 300],
+    ['flat', 300], ['bumps', 400, 3, 18], ['check'], ['dip', 400, 50], ['flat', 300], ['sticky', 400], ['flat', 1000], ['check'], ['flat', 900], ['flat', 400], ['finish'], ['flat', 200]],
+  crateEvery: 0,
+  setup() { G.za_cw = { gust: 0, gustT: 2, ang: 0, clean: {} }; },
+  tick(dt) {
+    za_level(dt);
+    const C = G.za_cw; C.ang += dt * 7;
+    if ((C.gustT -= dt) <= 0) { C.gustT = rand(2, 3); C.gust = .9; }
+    C.gust -= dt;
+    for (const c of cars) {
+      if (!za_seated(c)) continue;
+      const x = carX(c);
+      // spinning brushes twist the car around
+      for (const [bx, s] of ZA_CW.brush) if (Math.abs(x - bx) < 80) {
+        addVel(c.bB, 0, -s * 900 * dt); addVel(c.bA, 0, s * 900 * dt);
+        for (const p of c.list) { const v = vel(p); addVel(p, -v.x * .025, -260 * dt); }
+        if (Math.random() < .3) puffs(x + rand(-30, 30), carY(c) - rand(10, 60), 1, '#ffffff');
+        if ((c.za_scrub || 0) < G.t) { c.za_scrub = G.t + 1; pop(pick(['SCRUB!', 'SWISH!', 'BRRRSH!']), bx, carY(c) - 100, '#6ad1ff', 20); sfx.whoosh(); }
+      }
+      // the giant dryers blow light cars backward
+      if (za_in(x, ZA_CW.dry)) { const k = (820 + (C.gust > 0 ? 900 : 0)) / c.V.mass * dt; for (const p of c.list) addVel(p, -k, 0); }
+      ZA_CW.halls.forEach(([, out], i) => { const key = c.team + ':' + i; if (x > out && !C.clean[key]) { C.clean[key] = true; pop(['SQUEAKY CLEAN!', 'SPARKLY!', 'SO SHINY!'][i], x, carY(c) - 100, '#6ad1ff', 24); sfx.magic(); } });
+    }
+    for (const r of rags) if (!r.seat && !r.lost && za_in(r.p.pelvis.x, ZA_CW.dry)) for (const p of r.list) addVel(p, -600 * dt, 0);
+  },
+  draw(layer) {
+    const C = G.za_cw; if (!C) return;
+    const L = G.cam.x - 100, R = za_viewR() + 100, gy = x => groundY(x) ?? 430, top = 430 - 300;
+    const halls = ZA_CW.halls.filter(([a, b]) => b + 60 > L && a - 60 < R);
+    if (layer === 'back') {
+      // the buildings: back wall and tiles
+      for (const [a, b] of halls) {
+        ctx.fillStyle = '#d8e4f0'; ctx.fillRect(a, top, b - a, 300);
+        ctx.strokeStyle = 'rgba(90,98,120,.25)'; ctx.lineWidth = 2;
+        for (let x = Math.max(a, Math.floor(L / 60) * 60); x < Math.min(b, R); x += 60) { ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, 430); ctx.stroke(); }
+        for (let y = top + 50; y < 430; y += 50) { ctx.beginPath(); ctx.moveTo(Math.max(a, L), y); ctx.lineTo(Math.min(b, R), y); ctx.stroke(); }
+      }
+      // the dryer fans at the end of each dryer
+      for (const [, d1] of ZA_CW.dry) {
+        const fx = d1 + 40, fy = 330; if (fx < L || fx > R) continue;
+        ctx.fillStyle = '#5a6278'; ctx.strokeStyle = INK; ctx.lineWidth = 4; roundRect(fx - 50, fy - 70, 100, 140, 14); ctx.fill(); ctx.stroke();
+        circle(fx, fy, 46, INK); circle(fx, fy, 42, '#c9c7d6');
+        ctx.save(); ctx.translate(fx, fy); ctx.rotate(C.ang * 3); ctx.fillStyle = '#6ad1ff';
+        for (let i = 0; i < 4; i++) { ctx.rotate(Math.PI / 2); ctx.beginPath(); ctx.ellipse(20, 0, 20, 8, 0, 0, 7); ctx.fill(); ctx.stroke(); }
+        ctx.restore();
+        za_word('DRYER', fx, fy - 86, 14, '#ffffff');
+      }
+    }
+    if (layer !== 'front') return;
+    // the brushes: big spinning rollers
+    for (const [bx, s] of ZA_CW.brush) {
+      if (bx < L || bx > R) continue;
+      const y = gy(bx) - 95;
+      ctx.strokeStyle = INK; ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(bx, top); ctx.lineTo(bx, y); ctx.stroke();
+      ctx.save(); ctx.translate(bx, y); ctx.globalAlpha = .88;
+      circle(0, 0, 84, INK); circle(0, 0, 80, s > 0 ? '#2f6fe0' : '#ff4fd8');
+      ctx.rotate(C.ang * s); ctx.strokeStyle = s > 0 ? '#7fd6ff' : '#ffb0e6'; ctx.lineWidth = 7;
+      for (let i = 0; i < 12; i++) { ctx.rotate(Math.PI / 6); ctx.beginPath(); ctx.moveTo(20, 0); ctx.lineTo(78, 0); ctx.stroke(); }
+      ctx.globalAlpha = 1; circle(0, 0, 16, INK); circle(0, 0, 12, '#c9c7d6'); ctx.restore();
+    }
+    // foam hides the road
+    for (const [f0, f1] of ZA_CW.foam) {
+      if (f1 < L || f0 > R) continue;
+      ctx.globalAlpha = .93;
+      for (let x = f0; x < f1; x += 34) {
+        if (x < L || x > R) continue;
+        const y = gy(x), w = Math.sin(x * .07 + G.t * 2) * 6;
+        ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(x, y - 18 + w, 38, 0, 7); ctx.fill();
+        ctx.fillStyle = '#e6f4ff'; ctx.beginPath(); ctx.arc(x + 14, y - 30 + w, 16, 0, 7); ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      for (let i = 0; i < 10; i++) { const x = f0 + ((i * 97 + G.t * 40) % (f1 - f0)), y = gy(x) - 60 - ((G.t * 50 + i * 37) % 120); ctx.strokeStyle = '#6ad1ff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, y, 5 + (i % 3) * 2, 0, 7); ctx.stroke(); }
+      za_word('FOAM', (f0 + f1) / 2, 340, 18, '#6ad1ff');
+    }
+    // wind lines from the dryers
+    for (const [d0, d1] of ZA_CW.dry) {
+      if (d1 < L || d0 > R) continue;
+      ctx.strokeStyle = C.gust > 0 ? 'rgba(255,255,255,.9)' : 'rgba(255,255,255,.55)'; ctx.lineWidth = C.gust > 0 ? 4 : 2;
+      for (let i = 0; i < 14; i++) { const x = d1 - ((G.t * (C.gust > 0 ? 900 : 500) + i * 131) % (d1 - d0)), y = 300 + (i * 53) % 120; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 50, y); ctx.stroke(); }
+    }
+    // roofs, signs and dripping water at the doors
+    for (const [a, b, w1, w2] of halls) {
+      ctx.fillStyle = '#4a4f5e'; ctx.strokeStyle = INK; ctx.lineWidth = 5;
+      ctx.fillRect(a - 40, top - 70, b - a + 80, 70); ctx.strokeRect(a - 40, top - 70, b - a + 80, 70);
+      for (const x of [a - 40, b + 20]) { ctx.fillRect(x, top - 70, 20, 370); ctx.strokeRect(x, top - 70, 20, 370); }
+      for (let x = a + 60; x < b; x += 240) if (x > L && x < R) { circle(x, top + 4, 9, INK); circle(x, top + 4, 6, '#fff3a6'); }
+      za_word(w1, a + 160, top - 36, 30, '#ffd23f'); za_word(w2, a + 420, top - 36, 20, '#ff4fd8'); za_word('EXIT', b - 60, top - 36, 22, '#5ee08a');
+      ctx.fillStyle = '#6ad1ff';
+      for (let i = 0; i < 16; i++) { const x = a + 210 + i * 30, y = top + ((G.t * 300 + i * 41) % 290); if (x > L && x < R) { ctx.beginPath(); ctx.ellipse(x, y, 3, 7, 0, 0, 7); ctx.fill(); } }
+    }
+  },
+  cpu(r, c) {
+    // floor it through the brushes; hop out of the foam bumps now and then
+    const x = carX(c);
+    if (za_in(x, ZA_CW.foam) && Math.random() < .01) carHop(c);
+    return za_cpuDir(c, ZA_CW.brush.some(([bx]) => Math.abs(x - bx) < 140) || za_in(x, ZA_CW.dry) ? 1 : c.cpuK);
+  },
+});
+
+// ================= 10. Pop Goes the Bumper =================
+const ZA_PB = { L: 1500, X: [300, 1050] };
+const za_wrapD = d => ((d % ZA_PB.L) + ZA_PB.L * 1.5) % ZA_PB.L - ZA_PB.L / 2;
+function za_balPos(c, i) {
+  const a = carAng(c), fx = Math.cos(a), fy = Math.sin(a);
+  const ax = c.bA.x - fx * 12, ay = c.bA.y - fy * 12;
+  const off = [[-26, -12], [-46, -30], [-24, -46]][i];
+  return { ax, ay, x: ax + off[0] + Math.sin(G.t * 3 + i * 2 + c.team) * 3, y: ay + off[1] + Math.cos(G.t * 2.4 + i) * 3 };
+}
+function za_spike(c) {
+  const a = carAng(c), fx = Math.cos(a), fy = Math.sin(a), mx = (c.bA.x + c.bB.x) / 2, my = (c.bA.y + c.bB.y) / 2;
+  const bx = mx + fx * (c.V.base / 2 + 6), by = my + fy * (c.V.base / 2 + 6);
+  return { bx, by, x: bx + fx * 40, y: by + fy * 40 - 6, nx: -fy, ny: fx };
+}
+MINIS.push({
+  id: 'za_pop', rank: 10, engine: 'race', name: 'Pop Goes the Bumper', icon: 'balloon',
+  rules: 'brawl', vs: true, maxTime: 90, noPunch: true, noCatch: true,
+  howto: 'Pop the 3 balloons on the back of the other car with your spike! The road loops round. Punch = turbo.',
+  blurb: 'Every car has three balloons tied on the back. Pop the others with your pointy hood.',
+  deco: 'candy', sky: ['#9b6bff', '#ffd6f0'], ground: ['#e0a860', '#a56a36'], edge: '#ffd23f',
+  track: [['flat', 250], ['hill', 300, 36], ['flat', 400], ['hill', 300, 36], ['flat', 250], ['flat', 700], ['finish']],
+  startY: 430, crateEvery: 0,
+  setup() {
+    G.catchT = 1e9;
+    G.za_pb = { bal: [3, 3], popped: [] };
+    for (const c of cars) { za_place(c, ZA_PB.X[c.team] ?? 300); c.item = 'za_turbo'; c.za_turbo = 6; }
+    za_frame(-60, ZA_PB.L + 60, 380);
+  },
+  tick(dt) {
+    za_level(dt);
+    const B = G.za_pb; za_frame(-60, ZA_PB.L + 60, 380);
+    for (const c of cars) { c.stuckT = 0; za_cap(c, c.za_boost > G.t ? 1150 : 760); }
+    for (const c of cars.slice()) {
+      if (c.za_float) { if (G.t - c.za_float > 4) removeCar(c); continue; }
+      if (!za_seated(c)) continue;
+      // the road loops: out one tunnel, in the other
+      const x = carX(c), d = x > ZA_PB.L ? -ZA_PB.L : x < 0 ? ZA_PB.L : 0;
+      if (d) { moveBody(c.list, d, 0); moveBody(c.driver.list, d, 0); }
+      // a turbo every few seconds: punch for a burst of speed
+      if (c.za_had === 'za_turbo' && !c.item) {
+        const a = carAng(c); for (const p of c.list) addVel(p, Math.cos(a) * 360, Math.sin(a) * 360 - 40);
+        c.za_boost = G.t + 1;
+        for (let i = 0; i < 6; i++) fx_flame(c);
+        pop('TURBO!', carX(c), carY(c) - 80, '#ff8a00', 22); sfx.cannon(); c.za_turbo = 7;
+      }
+      // the turbo keeps pushing for a second
+      if (c.za_boost > G.t) { const a = carAng(c); if (carGround(c)) for (const p of c.list) addVel(p, Math.cos(a) * 900 * dt, Math.sin(a) * 900 * dt); if (Math.random() < .6) fx_flame(c); }
+      if (!c.item && (c.za_turbo -= dt) <= 0) { c.item = 'za_turbo'; pop('TURBO READY!', carX(c), carY(c) - 90, tc(c.team), 16); }
+      c.za_had = c.item;
+    }
+    for (const r of rags) if (!r.lost && !r.seat) { const x = r.p.pelvis.x; if (x > ZA_PB.L + 150 || x < -150) loseBody(r, 'space'); }
+    // spikes vs balloons
+    for (const a of cars) for (const v of cars) {
+      if (a === v || !za_seated(a) || !za_seated(v) || (v.za_cd || 0) > G.t || !B.bal[v.team]) continue;
+      const s = za_spike(a);
+      for (let i = B.bal[v.team] - 1; i >= 0; i--) {
+        const b = za_balPos(v, i);
+        const hit = Math.hypot(za_wrapD(b.x - s.x), b.y - s.y) < 26 || Math.hypot(za_wrapD(b.x - (s.x + s.bx) / 2), b.y - (s.y + s.by) / 2) < 22 || Math.hypot(za_wrapD(b.x - s.bx), b.y - s.by) < 20;
+        if (!hit) continue;
+        B.bal[v.team]--; v.za_cd = G.t + .45;
+        za_confetti(b.x, b.y, 3); sfx.boom(); shake(5);
+        pop(B.bal[v.team] ? pick(['POP!', 'BANG!', 'KA-POP!']) : 'PFFFBBBT!', b.x, b.y - 30, tc(a.team), 30);
+        if (!B.bal[v.team]) {
+          // all gone: the car deflates like a whoopee cushion and floats away
+          ejectDriver(v, 'PFFFBBBT!'); sfx.blow();
+          v.za_float = G.t; for (const p of v.list) { p.gk = -.3; addVel(p, rand(-60, 60), -200); }
+        }
+        break;
+      }
+    }
+  },
+  draw(layer) {
+    const B = G.za_pb; if (!B) return;
+    if (layer === 'back') za_frame(-60, ZA_PB.L + 60, 380);
+    if (layer === 'bed') {
+      for (const c of cars) {
+        if (!za_seated(c)) continue;
+        for (let i = 0; i < B.bal[c.team]; i++) {
+          const b = za_balPos(c, i);
+          ctx.strokeStyle = INK; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(b.ax, b.ay); ctx.quadraticCurveTo((b.ax + b.x) / 2 + 6, (b.ay + b.y) / 2 + 8, b.x, b.y + 15); ctx.stroke();
+          ctx.fillStyle = tc(c.team); ctx.lineWidth = 3; ctx.beginPath(); ctx.ellipse(b.x, b.y, 13, 16, 0, 0, 7); ctx.fill(); ctx.stroke();
+          ctx.fillStyle = 'rgba(255,255,255,.7)'; ctx.beginPath(); ctx.ellipse(b.x - 4, b.y - 6, 3, 5, -.4, 0, 7); ctx.fill();
+          ctx.fillStyle = tc(c.team); tri(b.x - 4, b.y + 18, b.x + 4, b.y + 18, b.x, b.y + 13);
+        }
+      }
+    }
+    if (layer === 'front') {
+      for (const c of cars) {
+        if (!za_seated(c)) continue;
+        const s = za_spike(c);
+        ctx.fillStyle = '#e6e6f0'; ctx.strokeStyle = INK; ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.moveTo(s.bx + s.nx * 9, s.by + s.ny * 9); ctx.lineTo(s.x, s.y); ctx.lineTo(s.bx - s.nx * 9, s.by - s.ny * 9); ctx.closePath(); ctx.fill(); ctx.stroke();
+      }
+      // tunnels at both ends of the loop
+      const gy = groundY(10) ?? 430;
+      for (const [x0, dir] of [[ZA_PB.L, 1], [0, -1]]) {
+        const bx = dir > 0 ? x0 : x0 - 320;
+        ctx.fillStyle = '#7a4fb0'; ctx.strokeStyle = INK; ctx.lineWidth = 5;
+        ctx.beginPath(); ctx.rect(bx, gy - 190, 320, 230); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = '#4a2a6a'; for (let y = gy - 170; y < gy; y += 40) for (let x = bx + ((y / 40) % 2 ? 0 : 20); x < bx + 320; x += 40) roundRect(x + 2, y, 34, 16, 4), ctx.fill();
+        // the dark doorway on the inner face
+        const dx = dir > 0 ? x0 : x0 - 110;
+        ctx.fillStyle = '#16132c'; ctx.beginPath(); ctx.moveTo(dx, gy + 4); ctx.lineTo(dx, gy - 90); ctx.arc(dx + 55, gy - 90, 55, Math.PI, 0); ctx.lineTo(dx + 110, gy + 4); ctx.closePath(); ctx.fill(); ctx.stroke();
+        for (let i = 0; i < 5; i++) circle(dx + 55 + Math.cos(Math.PI + i * Math.PI / 4) * 66, gy - 90 + Math.sin(Math.PI + i * Math.PI / 4) * 66, 6, (i + Math.floor(G.t * 4)) % 2 ? '#ffd23f' : '#ff4fd8');
+        za_word(dir > 0 ? 'LOOP →' : '→', dx + 55, gy - 120, 16, '#ffffff');
+      }
+      za_onScreen(() => {
+        G.teams.forEach((t, i) => {
+          const x = i ? W - 110 : 110;
+          ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.strokeStyle = INK; ctx.lineWidth = 3; roundRect(x - 62, 54, 124, 40, 12); ctx.fill(); ctx.stroke();
+          for (let k = 0; k < 3; k++) { const bx = x - 36 + k * 36, on = k < B.bal[t]; ctx.globalAlpha = on ? 1 : .25; ctx.fillStyle = tc(t); ctx.beginPath(); ctx.ellipse(bx, 72, 11, 13, 0, 0, 7); ctx.fill(); ctx.stroke(); ctx.globalAlpha = 1; }
+        });
+      });
+    }
+  },
+  cpu(r, c) {
+    const o = cars.find(k => k !== c && za_seated(k));
+    if (!o) return za_cpuDir(c, .5);
+    const d = ((carX(o) - carX(c)) % ZA_PB.L + ZA_PB.L) % ZA_PB.L;
+    if (d < ZA_PB.L / 2) {
+      // they're ahead: chase, and fire the turbo when close
+      if (c.item && d > 140 && d < 650 && Math.random() < .05) useCarItem(c);
+      return za_cpuDir(c, 1);
+    }
+    // they're behind: let them overshoot when they're close, otherwise keep going
+    const back = ZA_PB.L - d;
+    if (back < 220) { c.za_brk = c.za_brk ?? (Math.random() < .5); return za_cpuDir(c, c.za_brk ? -1 : 1); }
+    c.za_brk = null;
+    return za_cpuDir(c, .85);
+  },
+});
 // <<EXTRA LEVELS>>
 MINIS.forEach((m, i) => { m.rank = m.rank || i + 1; });
 
