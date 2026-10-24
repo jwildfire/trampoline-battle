@@ -133,6 +133,14 @@ body[data-skin="crayon"] .lvl .ln, body[data-skin="crayon"] .seg.games button { 
 .seg button[aria-pressed="true"] { background: var(--sun); }
 .levels { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-bottom: 8px; }
 .seg.games { margin-bottom: 14px; flex-wrap: wrap; }
+.engines { display: flex; gap: 10px; justify-content: center; margin: -4px 0 12px; }
+.engines button { display: flex; flex-direction: column; align-items: center; gap: 1px; min-width: 64px; padding: 4px 6px 3px; background: none; border: 3px solid transparent; border-radius: 16px; color: var(--ink); font: 900 11px var(--ui); letter-spacing: .04em; text-transform: uppercase; }
+.engines .em { font-size: 34px; line-height: 1.1; transition: transform .15s; }
+.engines button:hover .em { transform: rotate(-12deg) scale(1.12); }
+.engines button[aria-pressed="true"] { background: var(--sun); border-color: var(--ink); box-shadow: 0 3px 0 var(--ink); }
+.engines button[aria-pressed="true"] .em { animation: engWiggle .9s ease-in-out infinite alternate; }
+@keyframes engWiggle { from { transform: rotate(-9deg); } to { transform: rotate(9deg) translateY(-2px); } }
+@media (prefers-reduced-motion: reduce) { .engines button[aria-pressed="true"] .em { animation: none; } }
 .seg.tiers { margin-bottom: 8px; max-width: 420px; }
 .seg.tiers button { padding: 4px 8px; font-size: 13px; }
 .lvl .rk { font: 900 10px var(--ui); color: var(--muted); }
@@ -290,8 +298,14 @@ kbd { font: 900 12px var(--ui); color: var(--ink); background: var(--card-2); bo
 
     <div id="menu" class="overlay">
       <div class="panel" role="dialog" aria-labelledby="ttl">
-        <h1 class="title" id="ttl"><span class="t1">Trampoline</span> <span class="t2">Battle</span></h1>
+        <h1 class="title" id="ttl"><span class="t1" id="ttl1">Trampoline</span> <span class="t2">Battle</span></h1>
         <p class="tag" id="gameTag">Both teams drop a fighter at the same time, then battle. Knock an enemy off the trampoline to score.</p>
+        <div class="engines" id="engSeg" role="group" aria-label="What kind of game">
+          <button data-v="bounce" aria-pressed="true" title="Trampolines"><span class="em" aria-hidden="true">🤸</span>Bounce</button>
+          <button data-v="race" aria-pressed="false" title="Funny car races"><span class="em" aria-hidden="true">🏎️</span>Race</button>
+          <button data-v="climb" aria-pressed="false" title="Climb the tower"><span class="em" aria-hidden="true">🧗</span>Climb</button>
+          <button data-v="any" aria-pressed="false" title="A random one every round"><span class="em" aria-hidden="true">🤷</span>Whatever</button>
+        </div>
         <div class="seg games" id="gameSeg" role="group" aria-label="Game">
           <button data-v="battle" aria-pressed="false"><img class="px" alt="" data-ic="glove">Battle</button>
           <button data-v="party" aria-pressed="true"><img class="px" alt="" data-ic="ball">Party Levels</button>
@@ -485,7 +499,7 @@ const LEVELS = [
 ];
 
 // ================= settings =================
-const settings = { names: ['Red', 'Blue'], mode: '2p', game: 'party', mini: 'random', level: 'random', rounds: 0, pileRounds: 0, target: 0, skin: 'random', items: 'random', more: false, v4: true };
+const settings = { names: ['Red', 'Blue'], mode: '2p', game: 'party', mini: 'random', level: 'random', rounds: 0, pileRounds: 0, target: 0, skin: 'random', items: 'random', more: false, engine: 'bounce', v4: true };
 try { Object.assign(settings, JSON.parse(localStorage.getItem('tb3-settings') || '{}')); } catch (e) {}
 // new defaults: rounds are "you tell me" and everything else shuffles
 if (!settings.v4) Object.assign(settings, { v4: true, rounds: 0, pileRounds: 0, target: 0, skin: 'random', items: 'random', mini: 'random', level: 'random' });
@@ -1494,9 +1508,9 @@ function loseBody(r, cause) {
   r.lost = true; r.lostT = 0; r.move = 0; r.slam = false;
   const p = r.p.pelvis;
   const word = cause === 'wall' ? 'ZAP!' : cause === 'zap' ? 'ZAPPED!' : cause === 'space' ? 'BYE!' : cause === 'lava' ? 'SIZZLE!' : cause === 'water' ? 'SPLASH!' : level.groundWord || pick(['SPLAT!', 'KER-SPLAT!', 'FLOMP!']);
-  pop(word, clamp(p.x, 70, W - 70), clamp(p.y - 30, 70, GROUND - 40), '#ffffff', r.npc ? 26 : 40);
+  pop(word, G.eng ? p.x : clamp(p.x, 70, W - 70), G.eng ? p.y - 30 : clamp(p.y - 30, 70, GROUND - 40), '#ffffff', r.npc ? 26 : 40);
   if (isMini()) {
-    puffs(clamp(p.x, 10, W - 10), Math.min(p.y, G.floorY), 12, cause === 'lava' ? '#ff8a00' : cause === 'zap' ? '#fff36b' : level.groundPuff || '#c9a36b');
+    puffs(G.eng ? p.x : clamp(p.x, 10, W - 10), G.eng ? p.y : Math.min(p.y, G.floorY), 12, cause === 'lava' ? '#ff8a00' : cause === 'zap' ? '#fff36b' : level.groundPuff || '#c9a36b');
     r.sayUntil = 0; if (!r.npc) say(r, 'ko', 2.2);
     if (r.hat !== 'none') fx.hats.push({ x: r.p.head.x, y: r.p.head.y - 12 * r.s, vx: rand(-120, 120), vy: -rand(300, 450), a: 0, va: rand(-8, 8), hat: r.hat, col: tc(r.team), s: r.s, t: 0 });
     shake(r.npc ? 4 : 9); sfx.splat();
@@ -1832,6 +1846,7 @@ const HZ = {
     tick(h, dt) {
       if ((h.t -= dt) > 0) return;
       h.t = (h.o.every || 1.5) / (1 + G.heat * (h.o.ramp ?? 1.1)) * rand(.7, 1.3);
+      if (G.eng) { engDrop(pick(h.o.kinds || ['cow', 'anvil', 'bomb'])); if (G.heat > 1.4 && Math.random() < .35) engDrop(pick(h.o.kinds || ['cow'])); return; }
       const b = liveBed(); if (!b) return;
       dropFromSky(pick(h.o.kinds || ['cow', 'anvil', 'bomb']), rand(b.x1 + 20, b.x2 - 20), b);
       if (G.heat > 1.4 && Math.random() < .35) { const b2 = liveBed(); if (b2) dropFromSky(pick(h.o.kinds), rand(b2.x1 + 20, b2.x2 - 20), b2); }
@@ -2049,15 +2064,16 @@ const HZ = {
     tick(h, dt) {
       h.t -= dt;
       if (h.on > 0) { h.on -= dt; G.windX = h.dir * (h.o.strength || 650) * (1 + G.heat * .4) * Math.min(1, h.on * 2, (2.6 - h.on) * 3); if (h.on <= 0) { G.windX = 0; h.t = rand(2.5, 4.5) / (1 + G.heat * .3); } }
-      else if (h.t <= 0) { h.on = 2.6; h.dir = Math.random() < .5 ? -1 : 1; pop(h.dir > 0 ? 'GUST →' : '← GUST', W / 2, 140, '#e6f6ff', 30); sfx.blow(); }
+      else if (h.t <= 0) { h.on = 2.6; h.dir = Math.random() < .5 ? -1 : 1; pop(h.dir > 0 ? 'GUST →' : '← GUST', (G.eng ? G.cam.x : 0) + W / 2, (G.eng ? G.cam.y : 0) + 140, '#e6f6ff', 30); sfx.blow(); }
       for (const l of h.leaves) { l[0] += (G.windX * .5 + 30) * dt; if (l[0] > W + 20) l[0] = -20; if (l[0] < -20) l[0] = W + 20; }
     },
     draw(h, layer) {
       if (layer !== 'front' || !G.windX) return;
+      ctx.save(); if (G.eng) ctx.translate(G.cam.x, G.cam.y);
       ctx.globalAlpha = Math.min(1, Math.abs(G.windX) / 400);
       ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2;
       for (const [x, y] of h.leaves) { ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x - Math.sign(G.windX) * 40, y); ctx.stroke(); circle(x, y, 3, '#9ccf5a'); }
-      ctx.globalAlpha = 1;
+      ctx.restore();
     },
     threat(h, r) { return G.windX ? { x: r.p.pelvis.x - Math.sign(G.windX) * 120 } : null; },
   },
@@ -2118,6 +2134,77 @@ const HZ = {
     init(h) { const o = h.o; if (o.fric != null) G.fric = o.fric; if (o.grav) grav = (level.grav || 1) * o.grav; if (o.bedK) G.bedK = o.bedK; if (o.bigHead) G.bigHead = true; if (o.dance) G.dance = true; },
   },
 };
+// ----- chaos for the racing and climbing engines -----
+// drop something from the sky just ahead of the action
+function engDrop(k) {
+  if (G.eng === ENG.climb) return climbDrop(k);
+  const x = G.cam.x + rand(.45, .95) * W / G.cam.z;
+  const it = spawnItem(k, x, G.cam.y - 60, rand(-20, 20), 240, -1);
+  if (k === 'bomb') { it.lit = true; it.fuse = rand(2.2, 3.2); }
+  return it;
+}
+const raceLead = () => cars.reduce((a, c) => c.driver && (a == null || carX(c) > a) ? carX(c) : a, null);
+Object.assign(HZ, {
+  // puddles of oil, mud or boost appear on the road ahead of the leader
+  rzone: {
+    init(h) { h.t = 1; },
+    tick(h, dt) {
+      if ((h.t -= dt) > 0 || !G.raceZones) return;
+      h.t = (h.o.every || 3) / (1 + G.heat * .4) * rand(.7, 1.3);
+      const lx = raceLead(); if (lx == null) return;
+      const x = lx + rand(320, 700), w = rand(140, 280);
+      G.raceZones.push({ k: h.o.k, x1: x, x2: x + w, t: 12 });
+    },
+  },
+  // free race items for everyone
+  gifts: {
+    init(h) { h.t = 2; },
+    tick(h, dt) {
+      if ((h.t -= dt) > 0) return;
+      h.t = (h.o.every || 5) / (1 + G.heat * .3);
+      for (const c of cars) if (c.driver && !c.item) { c.item = pick(RACE_ITEMS); pop('FREE ' + c.item.toUpperCase() + '!', carX(c), carY(c) - 80, tc(c.team), 18); }
+      sfx.pickup();
+    },
+  },
+  // cows wander down the road the wrong way
+  stampede: {
+    init(h) { h.t = 2; },
+    tick(h, dt) {
+      if ((h.t -= dt) > 0) return;
+      h.t = (h.o.every || 3.5) / (1 + G.heat * .4) * rand(.7, 1.3);
+      const lx = raceLead(); if (lx == null) return;
+      const x = lx + rand(500, 800), gy = groundY(x); if (gy == null) return;
+      const it = spawnItem('cow', x, gy - 50, -rand(180, 300), -100, -1); it.life = 14;
+      sfx.moo();
+    },
+  },
+  // every car hops by itself now and then
+  hiccups: {
+    init(h) { h.t = 2; },
+    tick(h, dt) {
+      if ((h.t -= dt) > 0) return;
+      h.t = rand(1.6, 3.2) / (1 + G.heat * .3);
+      for (const c of cars) if (c.driver && Math.random() < .7) { c.hopCD = 0; carHop(c, rand(.8, 1.4)); pop('HIC!', carX(c), carY(c) - 70, '#ffffff', 20); }
+    },
+  },
+  // turn plain ledges into another kind, including the ones still to be built
+  ledges: {
+    init(h) { h.n = 0; this.tick(h); },
+    tick(h) {
+      if (!G.climb) return;
+      const L = G.climb.ledges;
+      for (; h.n < L.length; h.n++) if (L[h.n].type === 'normal' && Math.random() < (h.o.p ?? .5)) ledgeType(L[h.n], h.o.to, {});
+    },
+  },
+  // lava starts rising up the tower
+  climblava: {
+    init(h) { if (G.climb && G.climbLava == null) G.climbLava = G.cam.y + H + 60; },
+  },
+  // the screen starts scrolling up (faster if it already was)
+  scrollup: {
+    init(h) { G.scrollAdd = (G.scrollAdd || 0) + (h.o.speed || 22); },
+  },
+});
 function addHazard(k, o = {}) { const h = { k, o }; HZ[k].init && HZ[k].init(h); G.hz.push(h); return h; }
 
 // chaos cards stack up in Pile-Up and Survival
@@ -2142,7 +2229,30 @@ const CARDS = {
   lava:     ['LAVA FLOOR', 'It is rising. Slowly.', () => addHazard('lava', { speed: 3, cap: bed.y + 60 })],
   dance:    ['DANCE PARTY', 'Nobody can stop hopping', () => addHazard('set', { dance: true })],
 };
-const PILE_DECK = Object.keys(CARDS);
+Object.assign(CARDS, {
+  oilspill:  ['OIL SPILL', 'Slippery puddles ahead', () => addHazard('rzone', { k: 'oil', every: 2.6 })],
+  mudslide:  ['MUD', 'Splat splat splat', () => addHazard('rzone', { k: 'mud', every: 2.6 })],
+  boosts:    ['BOOST PADS', 'Free speed! Too much speed!', () => addHazard('rzone', { k: 'boost', every: 2.4 })],
+  icyroad:   ['ICY ROAD', 'Who froze the road?', () => addHazard('rzone', { k: 'ice', every: 2.4 })],
+  itemparty: ['ITEM PARTY', 'Free stuff for everyone', () => addHazard('gifts', { every: 4 })],
+  stampede:  ['COW STAMPEDE', 'They are going the wrong way', () => addHazard('stampede', { every: 3 })],
+  hiccups:   ['HICCUPS', 'The cars have the hiccups', () => addHazard('hiccups', {})],
+  icyledges: ['ICY LEDGES', 'Half the tower is frozen', () => addHazard('ledges', { to: 'ice', p: .5 })],
+  crumbly:   ['CRUMBLY', 'The ledges are made of cookie', () => addHazard('ledges', { to: 'crumble', p: .45 })],
+  springs:   ['SPRINGS', 'Some ledges went boing', () => addHazard('ledges', { to: 'spring', p: .25 })],
+  clouds:    ['CLOUDS', 'Fluffy and bouncy', () => addHazard('ledges', { to: 'cloud', p: .3 })],
+  lavarise:  ['LAVA', 'It is coming up the tower', () => addHazard('climblava', {})],
+  scrollup:  ['GOING UP', 'The screen will not wait for you', () => addHazard('scrollup', { speed: 22 })],
+});
+const PILE_DECK = ['bananas', 'cows', 'bombs', 'anvils', 'bumpers', 'weapons', 'wind', 'lowgrav', 'bouncy', 'ice', 'sweeper', 'wrecking', 'cannons', 'meteors', 'shrink', 'crowd', 'bighead', 'lava', 'dance'];
+// the chaos cards that make sense for each engine: Pile-Up, Survival and Pure Chaos deal from these
+const ENGINE_DECKS = {
+  race: { pile: ['bananas', 'cows', 'bombs', 'anvils', 'lowgrav', 'bighead', 'oilspill', 'mudslide', 'boosts', 'icyroad', 'itemparty', 'stampede', 'hiccups'],
+    surv: ['cows', 'bananas', 'oilspill', 'stampede', 'bombs', 'mudslide', 'hiccups', 'anvils', 'icyroad', 'lowgrav', 'boosts', 'bighead'] },
+  climb: { pile: ['cows', 'bombs', 'anvils', 'bananas', 'wind', 'lowgrav', 'bighead', 'icyledges', 'crumbly', 'springs', 'clouds', 'lavarise', 'scrollup'],
+    surv: ['anvils', 'cows', 'icyledges', 'bombs', 'wind', 'crumbly', 'springs', 'lavarise', 'bananas', 'scrollup', 'lowgrav', 'clouds'] },
+};
+const pileDeck = () => (ENGINE_DECKS[G.engine] || {}).pile || PILE_DECK;
 const SURV_DECK = ['cows', 'bombs', 'anvils', 'bananas', 'wind', 'sweeper', 'wrecking', 'cannons', 'meteors', 'shrink', 'bouncy', 'ice', 'lava', 'bumpers', 'lowgrav'];
 function playCard(k, announce = true) {
   const [name, sub, fn] = CARDS[k];
@@ -2555,7 +2665,80 @@ const SURVIVAL_DEF = { id: 'survival', name: 'Survival', icon: 'heart', rules: '
   setup() { G.deck = shuffle(SURV_DECK.slice()); G.nextCard = 3; },
   tick() { if (G.liveT >= G.nextCard) { G.nextCard += 10; if (!G.deck.length) G.deck = shuffle(SURV_DECK.slice()); playCard(G.deck.shift()); } } };
 
+// Racing survival: a long random road with a giant snowball rolling after you
+function raceSurvivalDef() {
+  const track = [['flat', 500]];
+  for (let i = 0; i < 170; i++) {
+    const hard = Math.min(1, i / 90), r = Math.random();
+    if (r < .2) track.push(['hill', rand(260, 520), rand(40, 90 + 70 * hard)]);
+    else if (r < .32) { const len = rand(300, 480); track.push(['bumps', len, Math.max(2, (len / 130) | 0), rand(10, 18)]); }
+    else if (r < .44) track.push(['slope', rand(300, 500), rand(-90, 120)]);
+    else if (r < .52 + hard * .08) track.push(['gap', rand(90, 150 + 80 * hard), rand(0, 60)]);
+    else if (r < .58) track.push(['tramp', rand(240, 300)]);
+    else if (r < .7) track.push([pick(['mud', 'ice', 'boost', 'boost']), rand(180, 320)]);
+    else if (r < .78) track.push(['dip', rand(300, 480), rand(40, 100)]);
+    else track.push(['flat', rand(200, 400)]);
+    if (i % 8 === 7) track.push(['check']);
+  }
+  return { id: 'survival-race', name: 'Outrun the Avalanche', icon: 'heart', engine: 'race', rules: 'survive', noPunch: true, heatTime: 70, noCatch: true,
+    howto: 'Keep driving! The snowball never stops. Something new every 10 seconds.', blurb: '', deco: 'snow', sky: ['#7fb8ff', '#e6f3ff'], ground: ['#f4f8ff', '#c9d8f0'], edge: '#9fb6d8',
+    track, crateEvery: 1100, startY: 430,
+    setup() { G.deck = shuffle(ENGINE_DECKS.race.surv.slice()); G.nextCard = 6; G.avX = -1300; G.avR = 150; G.avA = 0; },
+    // crashing isn't the end, as long as the snowball is still far enough behind your last checkpoint
+    camExtra(pts) {
+      const x = G.avX + G.avR * .2, back = Math.min(...pts.map(p => p.x));
+      return back - x < 900 ? { t: -1, x, y: (groundY(G.avX) ?? pts[0].y) - G.avR * .6 } : null;
+    },
+    onOut(r) {
+      const c = cars.find(o => o.team === r.team);
+      if (!G.avHit && c && c.checkX - G.avX > 450) { G.respawn[r.team] = G.liveT + 1.2; pop('QUICK, NEW CAR!', carX(c), carY(c) - 110, tc(r.team), 20); }
+    },
+    tick(dt) {
+      if (G.liveT >= G.nextCard) { G.nextCard += 10; if (!G.deck.length) G.deck = shuffle(ENGINE_DECKS.race.surv.slice()); playCard(G.deck.shift()); }
+      // the snowball speeds up and grows, and catches up fast if you're far ahead
+      const lx = raceLead() ?? G.avX;
+      const sp = (185 + G.heat * 95) * Math.min(1, .3 + G.liveT / 4) + Math.max(0, lx - G.avX - 1700) * .6;
+      G.avX += sp * dt; G.avA += sp * dt / G.avR; G.avR = Math.min(260, 150 + G.liveT * 1.2);
+      G.avHit = true;
+      for (const c of cars) if (c.driver && carX(c) < G.avX + G.avR * .8) { ejectDriver(c, pick(['SNOWBALLED!', 'ROLLED UP!', 'BRRR!'])); sfx.slam(1); }
+      for (const r of rags) if (!r.lost && !r.seat && r.p.pelvis.x < G.avX + G.avR * .7) loseBody(r, 'crash');
+      G.avHit = false;
+    },
+    draw(layer) {
+      if (layer !== 'front') return;
+      const gy = groundY(G.avX) ?? groundY(G.avX + 100) ?? 430, y = gy - G.avR, R = G.avR;
+      ctx.save(); ctx.translate(G.avX, y);
+      ctx.fillStyle = 'rgba(255,255,255,.6)';
+      for (let i = 0; i < 6; i++) { ctx.beginPath(); ctx.arc(-R - 20 - i * 30, R - 20 - (i * 37 % 60), 18 - i * 2, 0, 7); ctx.fill(); }
+      ctx.rotate(G.avA);
+      ctx.fillStyle = '#ffffff'; ctx.strokeStyle = '#16132c'; ctx.lineWidth = 6;
+      ctx.beginPath(); ctx.arc(0, 0, R, 0, 7); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#d6e4f7';
+      for (const [a, d, s] of [[0, .5, .22], [2, .62, .16], [4, .4, .18], [5.2, .7, .12]]) { ctx.beginPath(); ctx.arc(Math.cos(a) * R * d, Math.sin(a) * R * d, R * s, 0, 7); ctx.fill(); }
+      // things it has scooped up
+      ctx.font = `${Math.round(R * .3)}px sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ['🐄', '🌲', '🛁', '🦆'].forEach((e, i) => ctx.fillText(e, Math.cos(i * 1.6 + 1) * R * .55, Math.sin(i * 1.6 + 1) * R * .55));
+      ctx.restore();
+    } };
+}
+// Climbing survival: a tower that never ends and a screen that never stops rising
+const CLIMB_SURVIVAL_DEF = { id: 'survival-climb', name: 'Up, Up and Away', icon: 'heart', engine: 'climb', rules: 'survive', noPunch: true, heatTime: 70,
+  howto: 'Keep climbing! The screen keeps rising. Something new every 10 seconds.', blurb: '',
+  gen: { infinite: true, mix: { normal: 8, ice: 1, conveyor: 1, move: 1, cloud: .5 } }, scroll: 26,
+  setup() { G.deck = shuffle(ENGINE_DECKS.climb.surv.slice()); G.nextCard = 6; },
+  // the computer climbs to keep up, not to race off the top of the screen
+  cpu(r) { const p = r.p.pelvis, o = rags.find(q => q.team !== r.team && q.team < 2 && !q.lost); return o && p.y < o.p.pelvis.y - 200 ? { x: p.x, y: p.y } : null; },
+  tick() { if (G.liveT >= G.nextCard) { G.nextCard += 10; if (!G.deck.length) G.deck = shuffle(ENGINE_DECKS.climb.surv.slice()); playCard(G.deck.shift()); } } };
+const survivalDef = () => G.engine === 'race' ? raceSurvivalDef() : G.engine === 'climb' ? CLIMB_SURVIVAL_DEF : SURVIVAL_DEF;
+// best solo survival time, kept per engine
+const survKey = e => (e || G.engine || 'bounce') === 'bounce' ? 'survival' : 'survival_' + (e || G.engine);
 function pileupDef() {
+  if (G.engine !== 'bounce') {
+    // racing and climbing pile-up: a random level from the top 20, with the cards on top
+    const pool = levelsFor(G.engine).filter(m => m.rank <= 20 && m !== G.mini), base = pick(pool.length ? pool : levelsFor(G.engine));
+    return Object.assign({}, base, { name: `Round ${G.round}: ${base.name}`,
+      howto: G.cards.length ? `Chaos so far: ${G.cards.map(k => CARDS[k][0].toLowerCase()).join(', ')}` : 'Nothing extra yet. Enjoy the peace while it lasts.' });
+  }
   const base = LEVELS[(G.round - 1) % LEVELS.length];
   return Object.assign({}, base, { id: 'pileup', name: `Round ${G.round}`, rules: 'brawl', vs: true, maxTime: 75, beds: [base.bed], rain: null, cannons: false,
     howto: G.cards.length ? `Chaos so far: ${G.cards.map(k => CARDS[k][0].toLowerCase()).join(', ')}` : 'Nothing yet. Enjoy the peace while it lasts.' });
@@ -2862,11 +3045,14 @@ function raceCamera(dt) {
     else { const r = TEAMS[t].active.find(o => !o.lost) || TEAMS[t].active[0]; if (r) pts.push({ t, x: r.p.pelvis.x, y: r.p.pelvis.y }); }
   }
   if (!pts.length) return;
+  // a level can ask the camera to keep something else in view too (the avalanche)
+  const extra = G.mini.camExtra && G.mini.camExtra(pts);
+  if (extra) pts.push(extra);
   const lead = pts.reduce((a, b) => b.x > a.x ? b : a), last = pts.reduce((a, b) => b.x < a.x ? b : a);
   const spread = lead.x - last.x;
   let z = clamp((W - 300) / Math.max(1, spread), .55, 1);
   // too far behind? zoom out first, then give the straggler a lift
-  if (pts.length > 1 && spread > (W - 160) / .55 && last.c && G.phase === 'live' && G.liveT > G.catchT && G.t - (last.c.lastGas || -9) < 2) {
+  if (pts.length > 1 && !G.mini.noCatch && spread > (W - 160) / .55 && last.c && G.phase === 'live' && G.liveT > G.catchT && G.t - (last.c.lastGas || -9) < 2) {
     G.catchT = G.liveT + 2.5;
     const gx = lead.x - 200, gy = groundY(gx);
     if (gy != null) {
@@ -3102,6 +3288,15 @@ const LEDGE_TYPES = ['normal', 'ice', 'sticky', 'conveyor', 'move', 'crumble', '
 function addLedge(x1, x2, y, o = {}) {
   const type = o.type || 'normal';
   const L = { x1, x2, y1: y, y2: y, r: 8, oneway: type !== 'ground', ground: true, type, bx1: x1, bx2: x2, by: y, o };
+  ledgeType(L, type, o);
+  addSeg(L);
+  G.climb.ledges.push(L);
+  return L;
+}
+// what a ledge does (also used to change a ledge mid-round)
+function ledgeType(L, type, o) {
+  const y = L.y1;
+  L.type = type; L.slide = L.bounce = L.vx = L.touchFn = undefined;
   if (type === 'ice') L.slide = .998;
   if (type === 'sticky') L.slide = .55;
   if (type === 'cloud') L.bounce = .95;
@@ -3113,9 +3308,6 @@ function addLedge(x1, x2, y, o = {}) {
     if (b.type === 'rag' && !b.lost && (b.springT || 0) < G.t) { b.springT = G.t + .4; pushBody(b, 0, -1150 - Math.max(0, vel(b.p.pelvis).y) * .3); pop(pick(['SPROING!', 'BOING!', 'WHEEE!']), p.x, y - 40, '#7dff6a', 20); sfx.boing(1); }
   };
   if (o.fn) L.touchFn = o.fn;
-  addSeg(L);
-  G.climb.ledges.push(L);
-  return L;
 }
 // a random tower: ledges zig-zag up with gaps a kid can jump
 function genLedges(gen, fromY, toY) {
@@ -3175,10 +3367,12 @@ function climbPost(dt) {
   const C = G.climb, def = G.mini, live = G.phase === 'live', cam = G.cam;
   // more tower as you go, for the never-ending ones
   if (def.gen && def.gen.infinite) while (C.genY > cam.y - 500) { const list = genLedges(def.gen, C.genY, C.genY - 400); for (const L of list) addLedge(...L); C.genY = list[list.length - 1][2]; }
-  let top = 1e9;
-  for (const t of G.teams) for (const r of TEAMS[t].active) if (!r.lost) { top = Math.min(top, r.p.pelvis.y); C.best[t] = Math.max(C.best[t], climbHeight(r.p.pelvis.y)); }
-  if (top < 1e9) { const ty = top - H * .45; if (ty < cam.y) cam.y += (ty - cam.y) * Math.min(1, dt * 3); }
-  if (live && def.scroll) cam.y -= def.scroll * (1 + G.heat * .5) * dt;
+  let top = 1e9, low = -1e9;
+  for (const t of G.teams) for (const r of TEAMS[t].active) if (!r.lost) { top = Math.min(top, r.p.pelvis.y); low = Math.max(low, r.p.pelvis.y); C.best[t] = Math.max(C.best[t], climbHeight(r.p.pelvis.y)); }
+  // follow the leader, but keep whoever is lower on screen until the leader nears the top edge
+  if (top < 1e9) { const ty = Math.max(top - H * .45, Math.min(low - H + 110, top - 70)); if (ty < cam.y) cam.y += (ty - cam.y) * Math.min(1, dt * 3); }
+  const scroll = (def.scroll || 0) + (G.scrollAdd || 0);
+  if (live && scroll) cam.y -= scroll * (1 + G.heat * .5) * dt;
   if (C.summit) cam.y = Math.max(cam.y, C.top - 140);
   if (G.climbLava != null && live) {
     G.climbLava = Math.min(G.climbLava, cam.y + H + 80) - (def.lavaSpeed ?? 18) * (1 + G.heat) * dt;
@@ -3368,22 +3562,40 @@ const fmtT = t => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2
 
 function startGame() {
   G.game = settings.game; G.paused = false; $('#confirm').hidden = true;
-  G.score = [0, 0]; G.round = 0; G.lives = 3; G.cleared = 0; G.played = 0; G.cards = []; G.endlessBag = []; G.sched = [];
+  G.score = [0, 0]; G.round = 0; G.lives = 3; G.cleared = 0; G.played = 0; G.cards = []; G.endlessBags = {}; G.sched = []; G.engHist = [];
   $('#banner').hidden = true;
   if (G.game === 'battle') { startMatch(); return; }
   nextRound();
+}
+// which engines have something to play in this game mode
+const ENGINES = ['bounce', 'race', 'climb'];
+const engineReady = (e, g) => e === 'bounce' || g === 'survival' || levelsFor(e).length > 0;
+function pickEngine() {
+  const g = G.game, want = settings.engine || 'bounce';
+  if (g === 'battle') return 'bounce';
+  if (want === 'any') {
+    const ok = ENGINES.filter(e => engineReady(e, g));
+    // avoid the same engine three times running
+    let e = pick(ok);
+    if (ok.length > 1 && G.engHist && G.engHist[0] === e && G.engHist[1] === e) e = pick(ok.filter(o => o !== e));
+    G.engHist = [e, ...(G.engHist || [])].slice(0, 2);
+    return e;
+  }
+  return engineReady(want, g) ? want : 'bounce';
 }
 function nextRound() {
   G.round++;
   let def;
   randomLook();
-  if (G.game === 'party') def = isRandom() || settings.mini === 'random' || !MINIS[settings.mini] ? endlessPick() : MINIS[settings.mini];
-  else if (G.game === 'survival') def = SURVIVAL_DEF;
+  G.engine = pickEngine();
+  const chosen = MINIS[settings.mini];
+  if (G.game === 'party') def = isRandom() || settings.mini === 'random' || !chosen || (settings.engine !== 'any' && (chosen.engine || 'bounce') !== G.engine) ? endlessPick() : (G.engine = chosen.engine || 'bounce', chosen);
+  else if (G.game === 'survival') def = survivalDef();
   else if (G.game === 'chaos') def = chaosPick();
   else if (G.game === 'endless') {
     def = endlessPick();
   } else {
-    if (G.round > 1) { const left = PILE_DECK.filter(k => !G.cards.includes(k)); G.cards.push(pick(left.length ? left : PILE_DECK)); }
+    if (G.round > 1) { const deck = pileDeck(), left = deck.filter(k => !G.cards.includes(k)); G.cards.push(pick(left.length ? left : deck)); }
     def = pileupDef();
   }
   startRound(def);
@@ -3397,17 +3609,24 @@ function endlessPick() {
   const all = levelsFor(G.engine);
   let pool = all.filter(m => inTier(m) && m !== G.mini);
   if (!pool.length) pool = all.filter(m => m.rank <= 20 && m !== G.mini);
+  if (!pool.length) pool = all;
   if (tier === 'top') {
     // the top 20 come out of a shuffled bag so they don't repeat
-    G.endlessBag = (G.endlessBag || []).filter(m => pool.includes(m));
-    if (!G.endlessBag.length) G.endlessBag = shuffle(pool.slice());
-    return G.endlessBag.pop();
+    // one bag per engine
+    const bags = G.endlessBags || (G.endlessBags = {}), e = G.engine || 'bounce';
+    bags[e] = (bags[e] || []).filter(m => pool.includes(m));
+    if (!bags[e].length) bags[e] = shuffle(pool.slice());
+    return bags[e].pop();
   }
   return pick(pool);
 }
 // how chaotic each level idea is (1-10, from the design page), keyed by squashed name
 const IDEA_CHAOS = {'itsrainingeverything':10,'moshpit':10,'sweeper':10,'volleybonkers':9,'hotpotato':9,'weaponfrenzy':10,'lavarising':9,'musicaltrampolines':8,'meteorshower':10,'kingofthecloud':9,'sharkbait':9,'wreckingballs':10,'coinfountain':8,'sumoshrink':9,'simonbounce':8,'whackamole':8,'gravityroulette':9,'skytower':7,'cannonalley':9,'balloonpop':7,'runawaytrain':7,'paintsplat':7,'dodgeballdoom':7,'popcornpanic':8,'pirateshiptilt':8,'tornadoalley':8,'hoopdreams':7,'dinostampede':8,'bouncycastlesiege':7,'giantbootstomp':8,'piataparty':6,'snowballfort':7,'laserlimbo':8,'bowlingstrike':7,'conveyorchaos':8,'megatrampoline':7,'teenytinytrampoline':7,'capturetheflag':7,'pianokeys':7,'bubblehop':7,'junglevines':7,'spacestationspin':8,'magnetceiling':8,'icefloes':8,'lightsout':8,'invisibletrampoline':6,'skysoccer':6,'mirrorflip':7,'eggcatch':6,'pillowfightsleepover':6,'grabbyclaw':6,'seesawshowdown':7,'obstaclecourse':7,'robovacuum':7,'carwash':7,'jellywobble':7,'ghostchase':6,'keepyuppy':6,'trampolinegolf':7,'windmill':7,'lilypadleap':6,'crownsnatch':6,'bumpercars':6,'fruitsmash':6,'portalpanic':7,'avalanche':7,'tugofwar':6,'windtunnel':7,'pogosticks':7,'dunktank':6,'hauntedmansion':7,'treasuredig':7,'beehive':7,'sleepinggiant':6,'homerunderby':6,'pongpaddles':6,'dominotopple':6,'discospotlight':6,'downthewell':6,'pancakeflip':5,'ninjadojo':6,'slingshottargets':6,'toybox':6,'quickdraw':5,'castlemoat':6,'thunderstorm':6,'sushiconveyor':6,'webbuilder':6,'sandcastlesmash':5,'airhockey':6,'copycat':5,'ghostrace':5,'haystackmountain':6,'echocave':6,'hideandseek':5,'snailrace':4,'fishinghole':5,'tightropecircus':5,'zengarden':4,'robotrumble':5};
-const chaosOf = d => d.chaos || IDEA_CHAOS[d.name.toLowerCase().replace(/[^a-z0-9]/g, '')] || 5;
+const ENGINE_CHAOS = {
+  race: {'avalanche':10,'bananapeelgrandprix':10,'cowtapult':9,'trampolinehighway':9,'flushrush':10,'hotpotatotruck':10,'kingofthehump':9,'mooveover':9,'carwashofdoom':9,'popgoesthebumper':9,'thefloorislavaforreal':9,'flippityflophalfpipe':8,'brakelatemate':8,'bigfatramp':8,'longdog':8,'pinataparade':9,'squishthecakeparade':9,'crumblycookieroad':9,'moonbuggybounce':8,'wobblypizzadelivery':8},
+  climb: {'thefloorislavaforreal':10,'shoveapalooza':10,'udderlyridiculous':9,'boingtothemoon':9,'bombtagtower':10,'crumblyking':9,'bathtuboverflow':9,'slippysloppytower':9,'piggybankavalanche':8,'elevatorpunchup':9,'vineswingers':8,'jackandthesnorestalk':8,'wrongwayescalators':9,'toottower':8,'gemmine':8,'lightningladders':8,'summitsumo':8,'bananapeelbrawl':8,'flipflopblocks':7,'keytothetop':8},
+};
+const chaosOf = d => d.chaos || (ENGINE_CHAOS[d.engine] || IDEA_CHAOS)[d.name.toLowerCase().replace(/ñ/g, 'n').replace(/[^a-z0-9]/g, '')] || 5;
 // Pure Chaos: only the wildest levels, weighted toward the wildest of all
 function chaosPick() {
   const pool = levelsFor(G.engine).filter(m => chaosOf(m) >= 8 && m !== G.mini);
@@ -3423,7 +3642,7 @@ function startRound(def) {
   buildLevel(-1, def);
   G.hz = []; G.marks = []; G.liveT = 0; G.heat = 0; G.rscore = [0, 0]; G.respawn = [null, null]; G.outAt = [null, null]; G.bonusT = 0; G.kept = false;
   G.mus = G.pot = G.v = G.sim = G.bell = null; G.moles = []; G.balloons = [];
-  G.cannonsOn = false; G.lavaOn = false; G.floorWater = false; G.zoneCall = -1; G.bigHead = false; G.dance = false; G.fric = null; G.eventMega = false; G.kingOn = -1;
+  G.cannonsOn = false; G.lavaOn = false; G.floorWater = false; G.zoneCall = -1; G.bigHead = false; G.dance = false; G.fric = null; G.eventMega = false; G.kingOn = -1; G.scrollAdd = 0;
   fx.pops = []; fx.puffs = []; fx.confetti = []; fx.says = []; fx.bolts = [];
   G.teams = teamsFor(def);
   for (const tm of TEAMS) { Object.assign(tm, mkTeam(tm.t)); tm.dropped = true; tm.aimX = -999; }
@@ -3436,7 +3655,7 @@ function startRound(def) {
   if (G.game === 'chaos') {
     // everything at full speed from the first second, plus a pile of extra chaos
     G.heatBoost = 1.6;
-    const deck = shuffle(PILE_DECK.filter(k => !['lava', 'shrink', 'dance'].includes(k) || Math.random() < .3));
+    const deck = shuffle(pileDeck().filter(k => !['lava', 'shrink', 'dance', 'lavarise', 'scrollup'].includes(k) || Math.random() < .3));
     G.chaosCards = deck.slice(0, 4 + ((Math.random() * 3) | 0));
     for (const k of G.chaosCards) playCard(k, false);
     G.eventMega = Math.random() < .5;
@@ -3560,7 +3779,7 @@ function endRound(winner, info) {
     else if (!pass && G.kept) { text = 'OUT!'; color = '#ffc928'; sub = `You lasted ${fmtT(info.time)}`; }
     else { text = pass ? 'CLEARED!' : 'FAILED!'; color = pass ? '#5ee08a' : '#ff3b3b'; sub = pass ? pick(['Nice bouncing', 'Too easy?', 'Legendary']) : pick(['So close', 'The trampoline wins this time', 'Try again']); }
     if (G.game === 'endless') { if (pass) G.cleared++; else G.lives--; sub += pass ? ` · ${G.cleared} cleared` : ` · ${G.lives} ${G.lives === 1 ? 'life' : 'lives'} left`; }
-    else if (unlimited()) { if (pass) G.cleared++; G.played = (G.played || 0) + 1; if (G.game === 'survival') { saveBest('survival', Math.floor(info.time)); G.cleared = Math.max(G.cleared, Math.floor(info.time)); } }
+    else if (unlimited()) { if (pass) G.cleared++; G.played = (G.played || 0) + 1; if (G.game === 'survival') { saveBest(survKey(), Math.floor(info.time)); G.cleared = Math.max(G.cleared, Math.floor(info.time)); } }
     if (pass && G.game === 'party') { const k = 'mini-' + def.id; if (def.rules === 'race' || def.goal) saveBest(k + '-t', info.time, false); }
   } else {
     if (winner != null) { G.score[winner]++; text = `${nameOf(winner)} wins the round!`; }
@@ -3591,8 +3810,8 @@ function showMiniBanner() {
   let title, sub, color = '#16132c';
   if (res.solo) {
     if (G.game === 'survival') {
-      const nb = saveBest('survival', Math.floor(res.time));
-      title = fmtT(res.time); sub = nb ? 'New best survival time!' : `Best: ${fmtT(best.survival || 0)}. Something new arrives every 10 seconds.`;
+      const nb = saveBest(survKey(), Math.floor(res.time));
+      title = fmtT(res.time); sub = nb ? 'New best survival time!' : `Best: ${fmtT(best[survKey()] || 0)}. Something new arrives every 10 seconds.`;
       color = '#f29b17';
     } else if (G.game === 'endless') {
       const nb = saveBest('endless', G.cleared);
@@ -3660,7 +3879,7 @@ function finishGame() {
   const solo = isMini() && G.teams.length === 1;
   let title, sub, color = '#16132c';
   if (solo) {
-    if (G.game === 'survival') { title = `Best: ${fmtT(best.survival || 0)}`; sub = `${G.round} ${G.round === 1 ? 'run' : 'runs'} of Survival. Good bouncing!`; color = '#f29b17'; }
+    if (G.game === 'survival') { title = `Best: ${fmtT(best[survKey()] || 0)}`; sub = `${G.round} ${G.round === 1 ? 'run' : 'runs'} of Survival. Good bouncing!`; color = '#f29b17'; }
     else { title = `${G.cleared} cleared`; sub = `${G.cleared} of ${Math.max(G.played || 0, G.cleared)} levels cleared. Good bouncing!`; color = '#2f6fe0'; }
   } else {
     const [a, b] = G.score;
@@ -13550,7 +13769,7 @@ function renderHud() {
   $('#pl2').style.visibility = solo || (settings.mode === 'solo' && G.phase === 'menu' && settings.game !== 'battle') ? 'hidden' : '';
   if (solo) {
     const unl = unlimited() && G.game !== 'endless';
-    $('#s1').textContent = G.game === 'endless' || unl ? (G.game === 'survival' ? fmtT(best.survival || 0) : G.cleared) : '♥';
+    $('#s1').textContent = G.game === 'endless' || unl ? (G.game === 'survival' ? fmtT(best[survKey()] || 0) : G.cleared) : '♥';
     $('#o1').textContent = G.game === 'endless' ? ` cleared · ♥${G.lives}` : unl ? (G.game === 'survival' ? ' best' : ` cleared of ${G.played}`) : '';
   }
   $('#lvlName').textContent = mini ? G.mini.name : level.name;
@@ -13604,12 +13823,38 @@ const SHUF_SVG = '<svg class="shuf" viewBox="0 0 24 24" fill="none" stroke="curr
 const RULE_TAG = { survive: 'Survival', brawl: 'Brawl', ko: 'Knockouts', score: 'Score', race: 'Race' };
 const GAME_INFO = {
   battle: ['Battle', 'Both teams drop a fighter at the same time, then battle. Knock an enemy off the trampoline to score.'],
-  party: ['Party Levels', '20 mini-games on trampolines: survive, brawl, race, collect, play ball.'],
+  party: ['Party Levels', 'Lots of mini-games on trampolines: survive, brawl, race, collect, play ball.'],
   survival: ['Survival', 'No fighting. Just stay on. Every 10 seconds something new joins in: cows, cannons, sweepers, lava…'],
   pileup: ['Pile-Up', 'Start with nothing. Every round adds one more chaos card, and they all stay. The last rounds get very silly.'],
   chaos: ['Pure Chaos', 'Everything turned up to 11 from the first second: only the wildest levels, every hazard at full speed, and a pile of extra chaos on top.'],
   endless: ['Endless', 'Thrown into a random party level, then another, then another. The rare levels from the bottom of the list turn up about once every 10 rounds. Solo: 3 lives, how far can you get?'],
 };
+// the same modes read differently for each engine
+const ENGINE_INFO = {
+  race: {
+    party: 'Funny car games: bathtubs, couches and toilets with floppy drivers. Races, derbies, stunts and cows.',
+    survival: 'Outrun the Avalanche: a giant snowball rolls after you and keeps getting faster. Something new every 10 seconds: oil, cows, hiccups…',
+    pileup: 'Start with a normal race. Every round adds one more chaos card (oil, mud, cow stampedes, hiccups), and they all stay.',
+    chaos: 'Only the wildest car games, everything at full speed, and oil, cows and rockets on top.',
+    endless: 'One random car game after another. Solo: 3 lives, how far can you get?',
+  },
+  climb: {
+    party: 'Climb the tower: wall jumps, ladders, crumbly ledges and lava. First to the top, or the last one hanging on.',
+    survival: 'Up, Up and Away: the screen keeps rising, so keep climbing. Something new every 10 seconds: anvils, ice, springs, lava…',
+    pileup: 'Start with a normal tower. Every round adds one more chaos card (ice, springs, crumbly ledges, lava), and they all stay.',
+    chaos: 'Only the wildest towers, everything at full speed, and falling anvils, ice and lava on top.',
+    endless: 'One random tower after another. Solo: 3 lives, how far can you get?',
+  },
+  any: {
+    party: 'Trampolines, cars or towers: a random one every round.',
+    survival: 'Survive on a trampoline, in a car or up a tower: a random one every run.',
+    pileup: 'Pile-Up on trampolines, cars or towers: a random one every round, and the chaos cards stack up.',
+    chaos: 'The wildest trampolines, cars and towers, all turned up to 11.',
+    endless: 'A random level every round, and a random kind of game too.',
+  },
+};
+const gameText = g => (ENGINE_INFO[settings.engine] || {})[g] || GAME_INFO[g][1];
+const ENGINE_WORD = { bounce: ['Bounce', 'Trampoline'], race: ['Race', 'Bathtub'], climb: ['Climb', 'Tower'], any: ['Whatever', 'Whatever'] };
 // 0 means "you tell me": keep playing until someone presses Done
 function toOptions() {
   if (settings.game === 'battle') return { lab: 'Points to win', vals: [0, 5, 10, 20], key: 'target' };
@@ -13617,29 +13862,40 @@ function toOptions() {
   return { lab: 'Rounds to win', vals: [0, 1, 2, 3], key: 'rounds' };
 }
 function buildMenu() {
+  const eng = settings.engine || 'bounce';
+  // Battle is trampolines only
+  if (eng !== 'bounce' && settings.game === 'battle') settings.game = 'party';
   const g = settings.game, box = $('#levels');
   box.innerHTML = ''; box.hidden = false;
-  for (const b of $('#gameSeg').children) { b.setAttribute('aria-pressed', String(b.dataset.v === g)); const im = b.querySelector('img'); if (ICONS[im.dataset.ic]) im.src = ICONS[im.dataset.ic]; }
-  $('#gameTag').textContent = GAME_INFO[g][1];
+  for (const b of $('#engSeg').children) b.setAttribute('aria-pressed', String(b.dataset.v === eng));
+  $('#ttl1').textContent = ENGINE_WORD[eng][1];
+  for (const b of $('#gameSeg').children) { b.setAttribute('aria-pressed', String(b.dataset.v === g)); b.hidden = b.dataset.v === 'battle' && eng !== 'bounce'; const im = b.querySelector('img'); if (ICONS[im.dataset.ic]) im.src = ICONS[im.dataset.ic]; }
+  $('#gameTag').textContent = gameText(g);
   if (g === 'battle' || g === 'party') {
-    const list = g === 'battle' ? LEVELS : MINIS, sel = g === 'battle' ? settings.level : settings.mini;
+    // party levels for the chosen engine ("whatever" shows them all)
+    const pool = g === 'party' && eng !== 'any' ? levelsFor(eng) : null;
+    const list = g === 'battle' ? LEVELS : MINIS;
+    let sel = g === 'battle' ? settings.level : settings.mini;
+    if (pool && list[sel] && !pool.includes(list[sel])) sel = 'random';
+    const shelf = pool || MINIS;
     $('#lvlLab').textContent = g === 'battle' ? 'Arena' : 'Level';
     // party levels are split into three shelves: the top 20, ranks 21-50 and ranks 51-100
     const tier = settings.tier || 0, inTier = L => tier === 0 ? L.rank <= 20 : tier === 1 ? L.rank > 20 && L.rank <= 50 : L.rank > 50;
-    $('#tierSeg').hidden = g !== 'party' || MINIS.length <= 20;
+    $('#tierSeg').hidden = g !== 'party' || shelf.length <= 20;
     for (const b of $('#tierSeg').children) b.setAttribute('aria-pressed', String(+b.dataset.v === tier));
     const shuf = document.createElement('button');
-    const isShuf = (g === 'battle' ? settings.level : settings.mini) === 'random' || !list[sel];
+    const isShuf = sel === 'random' || !list[sel];
     shuf.className = 'lvl shufTile'; shuf.setAttribute('aria-pressed', String(isShuf));
     shuf.innerHTML = `${SHUF_SVG}<span class="ln">Shuffle</span><span class="tagr">${g === 'battle' ? 'Random arena' : 'Random every round'}</span>`;
     shuf.addEventListener('click', () => { ac(); sfx.click(); if (g === 'battle') settings.level = 'random'; else settings.mini = 'random'; saveSettings(); buildMenu(); previewLevel(); });
     box.appendChild(shuf);
     list.forEach((L, i) => {
-      if (g === 'party' && MINIS.length > 20 && !inTier(L)) return;
+      if (g === 'party' && (pool && !pool.includes(L) || shelf.length > 20 && !inTier(L))) return;
       const b = document.createElement('button');
       b.className = 'lvl'; b.id = 'lvl-' + i;
       b.setAttribute('aria-pressed', String(sel === i));
-      b.innerHTML = `<img class="px" alt="" src="${ICONS[L.icon] || ICONS.crate}"><span class="ln">${L.name}</span>${L.rules ? `<span class="tagr">${L.rank ? '#' + L.rank + ' · ' : ''}${RULE_TAG[L.rules]}</span>` : ''}`;
+      const em = eng === 'any' && L.engine ? (L.engine === 'race' ? '🏎️ ' : '🧗 ') : '';
+      b.innerHTML = `<img class="px" alt="" src="${ICONS[L.icon] || ICONS.crate}"><span class="ln">${em}${L.name}</span>${L.rules ? `<span class="tagr">${L.rank ? '#' + L.rank + ' · ' : ''}${RULE_TAG[L.rules] || L.rules}</span>` : ''}`;
       b.addEventListener('click', () => { ac(); sfx.click(); if (g === 'battle') settings.level = i; else settings.mini = i; saveSettings(); buildMenu(); previewLevel(); });
       box.appendChild(b);
     });
@@ -13650,14 +13906,15 @@ function buildMenu() {
     $('#lvlLab').textContent = 'How it works';
     const ic = { survival: 'heart', pileup: 'pile', endless: 'dice', chaos: 'zap' }[g];
     let extra = '';
-    if (g === 'survival' && best.survival) extra = ` Best solo time: ${fmtT(best.survival)}.`;
+    const sk = survKey(settings.engine === 'any' ? 'bounce' : settings.engine);
+    if (g === 'survival' && best[sk]) extra = ` Best solo time: ${fmtT(best[sk])}.`;
     if (g === 'endless' && best.endless) extra = ` Best solo run: ${best.endless} levels.`;
-    box.innerHTML = `<div class="modecard" style="grid-column:1/-1"><img class="px" alt="" src="${ICONS[ic]}"><p><b>${GAME_INFO[g][0]}.</b> ${GAME_INFO[g][1]}${extra}</p></div>`;
+    box.innerHTML = `<div class="modecard" style="grid-column:1/-1"><img class="px" alt="" src="${ICONS[ic]}"><p><b>${GAME_INFO[g][0]}.</b> ${gameText(g)}${extra}</p></div>`;
     $('#lvlBlurb').textContent = '';
   }
   $('#moreStuff').hidden = !settings.more;
   $('#moreBtn').setAttribute('aria-expanded', String(!!settings.more));
-  $('#startBtn').textContent = settings.more ? 'Just Bounce, Already' : 'Just Bounce';
+  $('#startBtn').textContent = `Just ${ENGINE_WORD[eng][0]}${settings.more ? ', Already' : ''}`;
   $('#goNote').textContent = settings.more ? 'Plays exactly what you picked below.'
     : g === 'battle' ? 'A random arena, skin and items.' : g === 'party' ? 'A random level, skin and items every round.' : 'A random skin and items every round.';
   const o = toOptions();
@@ -13673,7 +13930,7 @@ function previewLevel() {
   const g = settings.game;
   const anyMini = () => MINIS[(Math.random() * Math.min(20, MINIS.length)) | 0];
   if (g === 'battle' || g === 'pileup') buildLevel(g === 'battle' && LEVELS[settings.level] ? settings.level : (Math.random() * LEVELS.length) | 0);
-  else buildLevel(-1, g === 'party' ? MINIS[settings.mini] || anyMini() : g === 'survival' ? SURVIVAL_DEF : anyMini());
+  else { const d = g === 'party' ? MINIS[settings.mini] : null; buildLevel(-1, d && !d.engine ? d : g === 'survival' ? SURVIVAL_DEF : anyMini()); }
   G.mini = null; G.hz = []; G.marks = [];
   for (const tm of TEAMS) { tm.hanging = []; tm.active = []; tm.items = []; }
   const top = beds.reduce((a, b) => b.x2 - b.x1 > a.x2 - a.x1 ? b : a, bed);
@@ -13716,6 +13973,10 @@ function bindMenu() {
   $('#tierSeg').addEventListener('click', e => {
     const b = e.target.closest('button'); if (!b) return;
     ac(); sfx.click(); settings.tier = +b.dataset.v; saveSettings(); buildMenu();
+  });
+  $('#engSeg').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    ac(); sfx.click(); settings.engine = b.dataset.v; saveSettings(); buildMenu(); previewLevel();
   });
   $('#gameSeg').addEventListener('click', e => {
     const b = e.target.closest('button'); if (!b) return;
