@@ -10,6 +10,10 @@ You are adding party levels to `index.html` (one self-contained file, ~5,200 lin
 - `function addBed`, `function buildLevel`, `function bedUnder`, `function addMover`, `function moverHit` (world section and physics section).
 - `const WEAPONS`, `function giveWeapon`, `const ITEMS`, `const SPRITES`, `const PAL`, the `sfx` object.
 
+## How long a round should last
+
+Rounds should last about 30 seconds on average and almost always between 10 seconds and a minute. Keep time limits and `maxTime` at 60 or less. If one slip ends a round in a few seconds, give spare `lives`; if a race is over in a flash, use a higher goal with `raceAgain`. Timings already tuned from playthroughs live in `ROUND_TUNING` (next to `<<EXTRA LEVELS>>`); add your level there if playthroughs show it running long or short.
+
 ## What a level is
 
 ```js
@@ -23,6 +27,8 @@ MINIS.push({
   noPunch: true,             // survival levels: the punch button becomes slam
   maxTime: 90,               // brawl/survive with 2 players: call it a draw after this long
   heatTime: 45,              // seconds for G.heat to reach 1 (hazards speed up with G.heat)
+  lives: 2, soloLives: 3,    // brawl/survive: spare lives (back in after a moment); soloLives when playing alone
+  raceAgain: true,           // race with goal > 1: whoever scores starts again from the start
   howto: 'One short sentence telling kids what to do.', blurb: 'One short pitch line.',
   deco: 'yard',              // backdrop art: yard jungle dusk barn neon moon lava party pirate ice
   sky: ['#5fb6ff', '#c9ecff'], ground: ['#5cbf4a', '#3f9a33'],

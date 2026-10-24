@@ -1,5 +1,6 @@
 <!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
 <title>Trampoline Battle</title>
+<link rel=icon href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><path d='M14 38L8 58M50 38L56 58M25 42L23 58M39 42L41 58' stroke='%23222' stroke-width='4' stroke-linecap='round'/><ellipse cx='32' cy='36' rx='29' ry='10' fill='%231e88e5' stroke='%23222' stroke-width='3'/><ellipse cx='32' cy='35' rx='21' ry='6' fill='%23e53935'/><circle cx='32' cy='13' r='7' fill='%23ffca28' stroke='%23222' stroke-width='3'/></svg>">
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1392,7 +1393,8 @@ const TEAMS = [mkTeam(0), mkTeam(1)];
 let flashT = 0, shakeAmt = 0;
 const fx = { pops: [], puffs: [], confetti: [], says: [], bursts: [], rings: [], hats: [], bolts: [] };
 
-const isCpu = t => t > 1 || ((settings.mode === 'cpu' || settings.mode === 'solo') && t === 1);
+// G.autoplay (set only by tests) hands every team to the computer, for timing playthroughs
+const isCpu = t => t > 1 || G.autoplay || ((settings.mode === 'cpu' || settings.mode === 'solo') && t === 1);
 const nameOf = t => t > 1 ? 'The crowd' : settings.names[t] || (t ? 'Blue' : 'Red');
 // computer crowd fighters get their own colors
 const NPC_COL = ['#3ccf8e', '#9b6bff', '#ff8a00', '#ff4fd8', '#8a8aa8', '#14b8a6', '#c9a400', '#b0623a'];
@@ -2476,7 +2478,7 @@ const MINIS = [
     deco: 'dusk', sky: ['#3b2f73', '#ff9a6a'], ground: ['#4a5560', '#343c45'], beds: [[170, 790, 400]],
     hazards: [['wrecking', { period: 3.4 }]] },
   { id: 'coins', name: 'Coin Fountain', icon: 'coin', rules: 'score', time: 45, soloGoal: 25, respawn: true, scoreLabel: 'coins',
-    howto: 'Grab coins! Falling off spills half of yours.', blurb: 'Most coins in 45 seconds wins.',
+    howto: 'Grab coins! Falling off spills half of yours.', blurb: 'Most coins in 40 seconds wins.',
     deco: 'jungle', sky: ['#ffb36b', '#fff0b0'], ground: ['#e9c36b', '#c99c45'],
     beds: [[100, 400, 430], [560, 860, 430], [390, 570, 285]], spawn: [[250], [710]],
     setup() { G.coinT = .5; G.goldT = 10; },
@@ -3725,6 +3727,9 @@ function startRound(def) {
   G.hist = (G.hist || []).concat({ def, engine: G.engine }).slice(-30);
   buildLevel(-1, def);
   G.hz = []; G.marks = []; G.liveT = 0; G.heat = 0; G.rscore = [0, 0]; G.respawn = [null, null]; G.outAt = [null, null]; G.bonusT = 0; G.kept = false;
+  // spare lives in brawl and survive levels (soloLives when playing alone)
+  const spare = (teamsFor(def).length === 1 ? def.soloLives ?? def.lives : def.lives) || 0;
+  G.spare = [spare, spare];
   G.mus = G.pot = G.v = G.sim = G.bell = null; G.moles = []; G.balloons = [];
   G.cannonsOn = false; G.lavaOn = false; G.floorWater = false; G.zoneCall = -1; G.bigHead = false; G.dance = false; G.fric = null; G.eventMega = false; G.kingOn = -1; G.scrollAdd = 0;
   fx.pops = []; fx.puffs = []; fx.confetti = []; fx.says = []; fx.bolts = [];
@@ -3767,6 +3772,12 @@ function miniPoint(t, n, x, y) {
   if (G.phase !== 'live') return;
   G.rscore[t] += n;
   pop(`+${n} ${nameOf(t)}`, x, y, tc(t), 26); sfx.point();
+  // race levels that go to more than one point (raceAgain): whoever scores starts again from the bottom
+  const def = G.mini, goal = G.teams.length === 1 ? (def.soloGoal ?? def.goal) : def.goal;
+  if (def.rules === 'race' && def.raceAgain && G.rscore[t] < goal) {
+    for (const r of TEAMS[t].active.slice()) removeRag(r);
+    TEAMS[t].active = []; G.respawn[t] = G.liveT + 1;
+  }
 }
 function bigBlast(x, y, R, F, word = 'KABOOM!') {
   for (const p of parts) {
@@ -3798,7 +3809,13 @@ function miniOut(r, cause) {
   if (def.rules === 'ko') { const o = 1 - r.team; if (G.teams.includes(o)) miniPoint(o, 1, clamp(r.p.pelvis.x, 90, W - 90), 120); }
   if (def.onOut) def.onOut(r);
   if (['ko', 'score', 'race'].includes(def.rules)) G.respawn[r.team] = G.liveT + 1.3;
-  else if (!TEAMS[r.team].active.some(o => !o.lost)) G.outAt[r.team] = G.liveT;
+  else if (!TEAMS[r.team].active.some(o => !o.lost)) {
+    // a spare life: back in after a moment
+    if (G.spare && G.spare[r.team] > 0) {
+      const n = --G.spare[r.team]; G.respawn[r.team] = G.liveT + 1.3;
+      pop(n ? `${n + 1} LIVES LEFT` : 'LAST LIFE!', G.eng ? r.p.pelvis.x : clamp(r.p.pelvis.x, 110, W - 110), G.eng ? r.p.pelvis.y - 90 : 130, tc(r.team), 22);
+    } else G.outAt[r.team] = G.liveT;
+  }
 }
 function miniFrame(dt) {
   const def = G.mini;
@@ -3834,7 +3851,8 @@ function checkRound() {
     if (solo) {
       if (!alive(0)) return endRound(null, { time: T });
       const crowd = rags.some(r => r.npc && !r.lost);
-      if (timed && (T >= (def.soloTime || 30) + (G.bonusT || 0) || (def.npcs && !crowd))) return endRound(0, { time: T });
+      // clearing out the crowd ends the round early, unless the level says otherwise (crowdEnds: false)
+      if (timed && (T >= (def.soloTime || 30) + (G.bonusT || 0) || (def.npcs && !crowd && def.crowdEnds !== false))) return endRound(0, { time: T });
       return;
     }
     const al = G.teams.filter(alive);
@@ -4070,7 +4088,7 @@ function aiMini(r, dt) {
     if (!def.noPunch && (r.thinkT -= dt) <= 0) { r.thinkT = rand(.3, .7); if (nearestEnemy(r, 70 * r.s + 40)) attack(r, 1); }
   }
   // CPUs aren't perfect: they react most of the time
-  if (jumpNow && r.touch && Math.random() < .5 + (r.team === 1 ? .3 : 0)) jump(r);
+  if (jumpNow && r.touch && Math.random() < .5 + (r.team === 1 || G.autoplay ? .3 : 0)) jump(r);
   // never stand still on a vanished trampoline
   if (here && here.off) r.move = r.p.pelvis.x < W / 2 ? 1 : -1;
 }
@@ -4103,6 +4121,7 @@ function drawMiniHud() {
   } else {
     const lim = solo && G.game !== 'survival' ? (def.soloTime || 30) + (G.bonusT || 0) : 0;
     mid = lim ? fmtT(Math.max(0, lim - T)) : fmtT(T);
+    if (def.lives && G.spare) { left = '♥'.repeat(G.spare[0] + 1); if (!solo) right = '♥'.repeat(G.spare[1] + 1); }
   }
   if (G.game === 'endless' && solo) mid += `   ♥${G.lives}`;
   if (G.phase === 'roundEnd' && unlimited() && !(G.game === 'endless' && solo && G.lives <= 0)) {
@@ -9584,7 +9603,7 @@ function xc_ringNext() {
 }
 MINIS.push({
   id: 'xc_wind', rank: 68, name: 'Wind Tunnel', icon: 'xc_fan', rules: 'race', goal: 3, time: 90, vs: true, respawn: true,
-  howto: 'Jump into a fan\'s updraft and fly through the gold ring. 3 rings wins!', blurb: 'Big fans blow you up into the sky.',
+  howto: 'Jump into a fan\'s updraft and fly through the gold ring. 8 rings wins!', blurb: 'Big fans blow you up into the sky.',
   deco: 'pirate', sky: ['#7ec8ff', '#e3f6ff'], ground: SEA, groundWord: 'SPLASH!', groundPuff: '#bfe9ff',
   beds: [[30, 200, 470], [390, 570, 430], [760, 930, 470]], spawn: [[85, 300], [145, 300]],
   setup() {
@@ -11832,12 +11851,12 @@ function xd_ghostFrame(r) { const a = []; for (const j of JOINTS) a.push(Math.ro
 MINIS.push({
   id: 'xd_ghost', rank: 92, name: 'Ghost Race', get icon() { return xd_icon('xd_ghost', 'bell'); },
   rules: 'race', goal: 1, time: 60, soloTime: 45, respawn: true,
-  howto: 'Race to the gold trampoline. A see-through ghost replays your best run: beat it!',
+  howto: 'Race to the gold trampoline, twice. A see-through ghost replays your best run: beat it!',
   blurb: 'Race your own ghost from last time.',
   deco: 'xd_ghostnight', sky: ['#0b0a24', '#2a2050'], ground: ['#1a1430', '#0c0a1c'], floating: true,
   beds: [[30, 230, 480], [290, 410, 415], [470, 590, 350, { move: { ax: 55, period: 4 } }], [650, 770, 290], [800, 935, 225], [610, 735, 155, { style: 'gold' }]],
   spawn: [[90, 330], [170, 330]], hudX: 150,
-  setup() { xd_reg(); G.xd_gr = { rec: { 0: [], 1: [] }, next: 0, msg: null }; },
+  setup() { xd_reg(); G.xd_gr = { rec: { 0: [], 1: [] }, lap: { 0: 0, 1: 0 }, next: 0, msg: null }; },
   tick(dt) {
     const S = G.xd_gr;
     while (G.liveT >= S.next) {
@@ -11847,11 +11866,13 @@ MINIS.push({
     const gold = beds.length - 1;
     for (const r of xd_pl()) {
       if (!r.list.some(q => q.bedT < 4 && q.bedId === gold)) continue;
-      const key = 'p' + r.team, old = xd_ghosts[key];
-      if (!old || G.liveT < old.time) { xd_ghosts[key] = { time: G.liveT, f: S.rec[r.team].slice() }; pop(old ? 'NEW GHOST!' : 'GHOST SAVED!', 670, 70, '#5fe8ff', 26); }
+      // each lap is timed (and replayed) from when it started
+      const key = 'p' + r.team, old = xd_ghosts[key], lapT = G.liveT - S.lap[r.team];
+      if (!old || lapT < old.time) { xd_ghosts[key] = { time: lapT, f: S.rec[r.team].slice() }; pop(old ? 'NEW GHOST!' : 'GHOST SAVED!', 670, 70, '#5fe8ff', 26); }
       else pop('THE GHOST WAS FASTER!', 670, 70, '#c9c7d6', 20);
       sfx.ding(); sfx.cheer();
       miniPoint(r.team, 1, 670, 110);
+      S.rec[r.team] = []; S.lap[r.team] = G.liveT;
       return;
     }
   },
@@ -11875,10 +11896,10 @@ MINIS.push({
       ctx.fillStyle = INK; tri(gold.x2 - 12, gold.y - 72, gold.x2 + 22, gold.y - 60, gold.x2 - 12, gold.y - 46); ctx.fillStyle = '#3fbf5f'; tri(gold.x2 - 10, gold.y - 69, gold.x2 + 16, gold.y - 60, gold.x2 - 10, gold.y - 50);
     } else if (layer === 'bed') {
       // the ghosts: replays of each player's best run, drawn see-through
-      const f = Math.floor(G.liveT * 30);
       let any = false;
       for (const t of G.teams) {
         const g = xd_ghosts['p' + t]; if (!g) continue;
+        const f = Math.floor((G.liveT - S.lap[t]) * 30);
         any = true;
         const fr = g.f[Math.min(g.f.length - 1, f)]; if (!fr) continue;
         const P = {}; JOINTS.forEach((j, i) => { P[j] = [fr[i * 2], fr[i * 2 + 1]]; });
@@ -12919,11 +12940,11 @@ Object.assign(ITEMS, {
 
 // ================= 11. Vine Swingers =================
 const yb_VINE_LEDGES = [], yb_VINES = [];
-for (let i = 0, y = 420; i < 16; i++, y -= 165) {
+for (let i = 0, y = 420; i < 44; i++, y -= 165) {
   const cx = i % 2 ? 680 : 280;
   yb_VINE_LEDGES.push([cx - 110, cx + 110, y]);
   // a vine hangs in the gap on the way to the next ledge
-  if (i < 15) yb_VINES.push({ ax: 480 + (i % 2 ? 30 : -30), ay: y - 330, L: 200, A: .95, w: 2.3 + (i % 3) * .2, ph: i * 1.7, toX: i % 2 ? 280 : 680 });
+  if (i < 43) yb_VINES.push({ ax: 480 + (i % 2 ? 30 : -30), ay: y - 330, L: 200, A: .95, w: 2.3 + (i % 3) * .2, ph: i * 1.7, toX: i % 2 ? 280 : 680 });
 }
 function yb_tip(v, t) {
   const a = v.A * Math.sin(v.w * t + v.ph), da = v.A * v.w * Math.cos(v.w * t + v.ph);
@@ -12954,7 +12975,7 @@ MINIS.push({
   id: 'yb_vines', engine: 'climb', rank: 11, name: 'Vine Swingers', icon: 'yb_monkey', rules: 'race', goal: 1, soloGoal: 1, time: 150, soloTime: 100,
   howto: 'Jump into a vine to grab it, press up to let go and FLING! Punch or jump to shake off monkeys.', blurb: 'A jungle tower of swinging vines, and monkeys who think you are a banana.',
   sky: ['#3f9a5a', '#c9f2a8'], wallCol: '#6b4a2a', groundCol: '#4cbb47',
-  ledges: yb_VINE_LEDGES, top: -2320, summitX1: 400, summitX2: 640, spawn: [[540, 420], [760, 420]],
+  ledges: yb_VINE_LEDGES, top: -6940, summitX1: 400, summitX2: 640, spawn: [[540, 420], [760, 420]],
   setup() { G.yb_v = { monkeyT: 4 }; },
   tick(dt) {
     const S = G.yb_v, cam = G.cam;
@@ -13038,7 +13059,7 @@ MINIS.push({
 
 // ================= 12. Jack and the Snorestalk =================
 const yb_STALK = [];
-for (let i = 0, y = 425; y > -1600; i++, y -= 122) yb_STALK.push(i % 2 ? [492, 640, y] : [320, 468, y]);
+for (let i = 0, y = 425; y > -5200; i++, y -= 122) yb_STALK.push(i % 2 ? [492, 640, y] : [320, 468, y]);
 const yb_snoring = () => !G.yb_s || G.yb_s.st === 'snore';
 function yb_drawGiant(x, y, s, st) {
   // a sleepy giant face (eyes shut while snoring)
@@ -13063,7 +13084,7 @@ MINIS.push({
   id: 'yb_stalk', engine: 'climb', rank: 12, name: 'Jack and the Snorestalk', icon: 'yb_egg', rules: 'race', goal: 1, soloGoal: 1, time: 150, soloTime: 100,
   howto: 'Climb while the giant snores. When he wakes up, FREEZE! Anyone moving gets flicked off.', blurb: 'Grab the golden egg without waking the giant. Shhh.',
   sky: ['#7ec8ff', '#e6f6ff'], wallCol: '#5d8a3a', groundCol: '#5cbf4a',
-  ledges: yb_STALK, top: -1720, summitX1: 370, summitX2: 590, spawn: [[220, 420], [740, 420]],
+  ledges: yb_STALK, top: -5320, summitX1: 370, summitX2: 590, spawn: [[220, 420], [740, 420]],
   setup() { G.yb_s = { st: 'snore', t: rand(4, 6), zz: 0 }; },
   tick(dt) {
     const S = G.yb_s, cam = G.cam;
@@ -13133,7 +13154,7 @@ MINIS.push({
 
 // ================= 13. Wrong-Way Escalators =================
 const yb_BELT_X = [250, 520, 760, 520, 240, 470, 730, 560, 300, 220, 500, 750, 520];
-const yb_BELTS = yb_zigzag(420, -2000, 138, 230, yb_BELT_X).map((L, i, all) => {
+const yb_BELTS = yb_zigzag(420, -5600, 138, 230, yb_BELT_X).map((L, i, all) => {
   const next = all[i + 1], toward = next ? Math.sign((next[0] + next[1]) / 2 - (L[0] + L[1]) / 2) || 1 : 1;
   // most belts run away from the next ledge
   return [L[0], L[1], L[2], { type: 'conveyor', vx: (i % 4 === 2 ? toward : -toward) * (150 + (i % 3) * 20) }];
@@ -13143,7 +13164,7 @@ MINIS.push({
   id: 'yb_belts', engine: 'climb', rank: 13, name: 'Wrong-Way Escalators', icon: 'yb_belt', rules: 'race', goal: 1, soloGoal: 1, time: 150, soloTime: 90,
   howto: 'Every ledge is a conveyor belt. Run against them, or bump a lever to flip every belt at once!', blurb: 'An escalator tower where most belts run the wrong way.',
   sky: ['#2a1f5a', '#ff4f9a'], wallCol: '#3a3550', groundCol: '#5a5f6e',
-  ledges: yb_BELTS, top: -2050, spawn: [[480, 420], [760, 420]],
+  ledges: yb_BELTS, top: -5650, spawn: [[480, 420], [760, 420]],
   setup() { G.yb_b = { cd: 0, flips: 0, flashT: -9 }; },
   tick() {
     const S = G.yb_b;
@@ -13507,7 +13528,7 @@ const yb_FLIP = [];
 (() => {
   const xs = [300, 620, 380, 680, 300, 560, 760, 480, 240, 540, 760, 440, 240, 560, 700];
   let c = 'b';
-  for (let i = 0, y = 410; y > -1880; i++, y -= 128) {
+  for (let i = 0, y = 410; y > -5400; i++, y -= 128) {
     const cx = xs[i % xs.length];
     if (i % 6 === 5) { yb_FLIP.push([cx - 90, cx + 90, y, { type: 'normal' }]); continue; }   // a plain resting ledge
     yb_FLIP.push([cx - 85, cx + 85, y, { type: 'yb_flip', yb_c: c }]);
@@ -13527,7 +13548,7 @@ MINIS.push({
   id: 'yb_flip', engine: 'climb', rank: 19, name: 'Flip-Flop Blocks', icon: 'yb_flip', rules: 'race', goal: 1, soloGoal: 1, time: 150, soloTime: 100,
   howto: 'Every jump (anyone\'s!) swaps which colour is solid. Jump from red to blue to red...', blurb: 'Red and blue ledges swap between solid and ghostly every time anyone jumps.',
   sky: ['#1a1440', '#5a2f8a'], wallCol: '#3a3550', groundCol: '#ffffff',
-  ledges: yb_FLIP, top: -1950, spawn: [[480, 420], [700, 420]],
+  ledges: yb_FLIP, top: -5470, spawn: [[480, 420], [700, 420]],
   setup() { G.yb_f = { solid: 'b', flashT: -9, n: 0 }; yb_flipAll(); },
   yb_jump(r, jump0) { if (yb_jumped(r, jump0)) yb_flipAll(); return true; },
   cpu(r) {
@@ -14034,7 +14055,7 @@ MINIS.push({
   howto: 'Race to the flag! Watch the shadows: cows, anvils and pianos incoming.', blurb: 'First to the summit flag, while the farm falls on your head.',
   sky: ['#8fd3ff', '#e8f8ff'], wallCol: '#9a6a3a', groundCol: '#5cbf4a',
   gen: { mix: { normal: 8, ya_tramp: 1, crumble: 1 }, gapMin: 90, gapMax: 120, wMin: 150, wMax: 260 },
-  top: -1900,
+  top: -5600,
   setup() { G.ya_udder = { dropT: 2.5 }; ya_dress({ ya_tramp: L => ya_tramp(L) }); },
   cpu: r => ya_lazy(r, 260),
   tick(dt) {
@@ -15056,7 +15077,7 @@ const ZA_FL = { H: 770, x1: 40, x2: 1500, X: [560, 980] };
 MINIS.push({
   id: 'za_flush', rank: 5, engine: 'race', name: 'Flush Rush', icon: 'za_toilet',
   rules: 'ko', goal: 3, time: 100, vs: true, heatTime: 45, noPunch: true, noCatch: true,
-  howto: 'When the chain is pulled the drain opens and everything swirls toward it. Drive away from the swirl and bump the other car in! First to 3.',
+  howto: 'When the chain is pulled the drain opens and everything swirls toward it. Drive away from the swirl and bump the other car in! First to 2.',
   blurb: 'A sumo arena in a giant toilet bowl, and every few seconds someone pulls the chain.',
   deco: 'snow', sky: ['#9fdcff', '#f2fbff'], ground: ['#ffffff', '#c9d6e6'], edge: '#6ad1ff',
   track: [['flat', 160], ['slope', 340, 250], ['flat', 210], ['gap', 120], ['flat', 210], ['slope', 340, -250], ['flat', 160],
@@ -15155,7 +15176,7 @@ const ZA_HP = { x1: -290, x2: 1090, X: [-60, 860] };
 MINIS.push({
   id: 'za_potato', rank: 6, engine: 'race', name: 'Hot Potato Truck', icon: 'bomb',
   rules: 'ko', goal: 3, time: 100, vs: true, noPunch: true, noCatch: true,
-  howto: 'A ticking bomb sits on one car. Bump into the other car to pass it on before it goes POP! First to 3 pops wins.',
+  howto: 'A ticking bomb sits on one car. Bump into the other car to pass it on before it goes POP! First to 2 pops wins.',
   blurb: 'A ticking bomb sits on one car\'s roof. Bump someone to pass it on.',
   deco: 'candy', sky: ['#ff9ed2', '#ffe3f2'], ground: ['#c4884f', '#7a4d2a'], edge: '#ffd23f',
   track: [['flat', 1050], ['step', 0, -600], ['flat', 100], ['finish']],
@@ -16000,7 +16021,7 @@ function zb_shiftTeam(t, dy) {
 MINIS.push({
   id: 'zb_halfpipe', engine: 'race', rank: 12, name: 'Flippity Flop Halfpipe', icon: 'xr_car', rules: 'score', time: 60, soloTime: 60, soloGoal: 18, noCatch: true, freeSpin: true,
   howto: 'The pipe swings you up and down. Hold ← or → to pump higher and flip in the air, then land on your wheels to bank it!',
-  blurb: 'A giant skate halfpipe and 60 seconds to rack up flips and air time.',
+  blurb: 'A giant skate halfpipe and 45 seconds to rack up flips and air time.',
   deco: 'night', sky: ['#1a0f3d', '#5a2a8a'], ground: ['#e0a860', '#a8743a'], edge: '#ffe2a8',
   track: [['flat', 860]], startX: 510, startY: 430, crateEvery: 0,
   setup() {
@@ -16888,6 +16909,56 @@ Object.assign(ITEMS, {
 });
 // <<EXTRA LEVELS>>
 MINIS.forEach((m, i) => { m.rank = m.rank || i + 1; });
+
+// ---- round timing ----
+// Tuned from computer-vs-computer playthroughs (5 per level, alone and versus) so rounds mostly last 10–60 s and
+// about 30 s on average: time limits and goals come down where rounds dragged on, spare lives (lives / soloLives)
+// go up where one slip ended a round in a few seconds, and races that were over in a flash go to more points.
+const ROUND_TUNING = {
+  rain: { maxTime: 50 }, mosh: { lives: 4, maxTime: 55 }, sweeper: { maxTime: 55 }, potato: { lives: 4 },
+  musical: { lives: 4, maxTime: 55, soloTime: 30, crowdEnds: false }, meteor: { lives: 4 }, koth: { time: 45 }, shark: { lives: 1, soloLives: 4 },
+  wrecking: { lives: 4, hazards: [['wrecking', { period: 4.4 }]] }, coins: { time: 40, soloTime: 40, soloGoal: 20 },
+  sumo: { lives: 4 }, simon: { lives: 4, maxTime: 55, soloTime: 30, crowdEnds: false }, cannon: { maxTime: 50 }, moles: { time: 35 }, gravity: { lives: 4 },
+  tower: { goal: 3, raceAgain: true, time: 50 }, balloons: { time: 40 }, xa_train: { lives: 2, maxTime: 55 }, xa_paint: { time: 40, soloTime: 40, soloGoal: 450 },
+  xa_popcorn: { maxTime: 50 }, xa_ship: { lives: 4, maxTime: 55 }, xa_tornado: { maxTime: 50 }, xa_hoop: { time: 45, goal: 6 },
+  xa_dino: { maxTime: 50, soloLives: 1 }, xa_castle: { lives: 2, maxTime: 55 }, xa_boot: { lives: 1, maxTime: 50 },
+  xa_pinata: { time: 40, soloTime: 40, soloGoal: 15 }, xa_snow: { time: 50, goal: 3 }, xa_laser: { lives: 4 },
+  xa_bowl: { time: 40, soloGoal: 20 }, xa_belt: { maxTime: 50 }, xa_mega: { lives: 3, maxTime: 55 }, xa_tiny: { lives: 4, beds: [[420, 540, 400]] },
+  xa_ctf: { time: 55 }, xa_piano: { time: 45, goal: 3 }, xa_bubble: { lives: 4, maxTime: 55 },
+  xb_vines: { goal: 6, raceAgain: true, time: 50 }, xb_station: { lives: 2, maxTime: 55 }, xb_magnet: { lives: 1, maxTime: 55 },
+  xb_ice: { maxTime: 50 }, xb_dark: { lives: 2, maxTime: 55 }, xb_invis: { goal: 8, soloGoal: 7, time: 50, soloTime: 50 },
+  xb_soccer: { time: 50, goal: 3 }, xb_mirror: { goal: 14, soloGoal: 12, time: 50 }, xb_eggs: { time: 40 },
+  xb_pillow: { lives: 1, maxTime: 55 }, xb_claw: { maxTime: 50, soloTime: 35 }, xb_seesaw: { time: 45, goal: 9 },
+  xb_course: { goal: 4, time: 55 }, xb_vacuum: { maxTime: 50 }, xb_wash: { lives: 1, maxTime: 50, heatTime: 30 },
+  xb_jelly: { maxTime: 50, heatTime: 30 }, xb_ghosts: { lives: 1, soloLives: 1, maxTime: 55 },
+  xb_keepy: { time: 45, goal: 3, soloTime: 45, soloGoal: 6 }, xb_golf: { time: 50, goal: 2, soloTime: 50, soloGoal: 2 },
+  xb_windmill: { maxTime: 50 }, xc_lily: { time: 50 }, xc_crown: { time: 55 }, xc_bumper: { lives: 4, maxTime: 55 },
+  xc_fruit: { time: 40 }, xc_portal: { time: 50 }, xc_avalanche: { lives: 1, maxTime: 50 }, xc_tug: { maxTime: 50 },
+  xc_wind: { goal: 8, time: 50 }, xc_pogo: { lives: 1, maxTime: 55 }, xc_dunk: { time: 40, soloGoal: 10 },
+  xc_haunt: { maxTime: 50 }, xc_dig: { time: 40, soloTime: 40, soloGoal: 20 }, xc_bees: { maxTime: 50, heatTime: 30 },
+  xc_giant: { time: 55 }, xc_derby: { time: 40, soloGoal: 600 }, xc_pong: { time: 50 }, xc_domino: { time: 55 },
+  xc_well: { goal: 3, raceAgain: true, time: 50 }, xc_pancake: { maxTime: 50, heatTime: 35 }, xd_sling: { goal: 14 },
+  xd_toys: { lives: 4, maxTime: 55 }, xd_draw: { goal: 4, time: 55 }, xd_moat: { time: 55 }, xd_storm: { maxTime: 50, heatTime: 35 },
+  xd_sushi: { soloGoal: 11, soloTime: 40 }, xd_web: { time: 50, soloTime: 50 }, xd_sand: { goal: 5 }, xd_hockey: { goal: 4, time: 55 },
+  xd_copy: { goal: 6, soloGoal: 6, time: 50, soloTime: 50 }, xd_ghost: { goal: 2, soloGoal: 2, raceAgain: true, time: 50, soloTime: 50 }, xd_hay: { time: 55 },
+  xd_echo: { maxTime: 50, soloTime: 35 }, xd_snail: { time: 50 }, xd_fish: { time: 40, goal: 8, soloTime: 40, soloGoal: 4 },
+  xd_rope: { goal: 3, soloGoal: 4, raceAgain: true, time: 50 }, xd_zen: { goal: 4, soloGoal: 4, time: 50, soloTime: 50 },
+  xd_robots: { lives: 4, maxTime: 55 },
+  // climbing
+  yb_vines: { time: 60, soloTime: 60 }, yb_stalk: { time: 60, soloTime: 60 }, yb_belts: { time: 60, soloTime: 60 },
+  yb_flip: { time: 60, soloTime: 60 }, ya_udder: { time: 60, soloTime: 60 }, yb_toot: { goal: 250, soloGoal: 200 },
+  yb_lightning: { maxTime: 55, soloTime: 40 }, yb_sumo: { goal: 9 }, yb_peels: { lives: 1, maxTime: 55 }, yb_key: { time: 55, soloTime: 55 },
+  ya_lava: { maxTime: 50, soloTime: 40 }, ya_shove: { maxTime: 55 }, ya_moon: { goal: 450, soloGoal: 350 },
+  ya_bomb: { goal: 2, time: 55 }, ya_king: { time: 45, goal: 10 }, ya_bath: { maxTime: 50, soloTime: 40 },
+  ya_slip: { maxTime: 55, soloTime: 40 }, ya_lift: { maxTime: 55 },
+  // racing
+  za_avalanche: { maxTime: 50, heatTime: 32 }, za_banana: { time: 60 }, za_cowtapult: { time: 45 }, za_tramphwy: { time: 60 },
+  za_flush: { goal: 2, time: 55 }, za_potato: { goal: 2, time: 55 }, za_hump: { time: 55 }, za_moo: { time: 60 },
+  za_carwash: { time: 60 }, za_pop: { maxTime: 50 }, zb_lava: { maxTime: 50, soloTime: 40, heatTime: 30 },
+  zb_halfpipe: { time: 45, soloTime: 45, soloGoal: 15 }, zb_brake: { time: 60, soloTime: 60 }, zb_ramp: { time: 40, soloGoal: 120 },
+  zb_moon: { time: 60, soloTime: 50 }, zb_pizza: { time: 50, soloTime: 50 },
+};
+for (const m of MINIS) if (ROUND_TUNING[m.id]) Object.assign(m, ROUND_TUNING[m.id]);
 
 const SPR = {};
 function buildSprites() {
