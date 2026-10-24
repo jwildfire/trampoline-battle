@@ -2554,7 +2554,7 @@ function teamsFor(def) { return settings.mode === 'solo' && !def.vs ? [0] : [0, 
 function startRound(def) {
   G.mini = def;
   buildLevel(-1, def);
-  G.hz = []; G.marks = []; G.liveT = 0; G.heat = 0; G.rscore = [0, 0]; G.respawn = [null, null]; G.outAt = [null, null];
+  G.hz = []; G.marks = []; G.liveT = 0; G.heat = 0; G.rscore = [0, 0]; G.respawn = [null, null]; G.outAt = [null, null]; G.bonusT = 0; G.kept = false;
   G.mus = G.pot = G.v = G.sim = G.bell = null; G.moles = []; G.balloons = [];
   G.cannonsOn = false; G.lavaOn = false; G.floorWater = false; G.zoneCall = -1; G.bigHead = false; G.dance = false; G.fric = null; G.eventMega = false; G.kingOn = -1;
   fx.pops = []; fx.puffs = []; fx.confetti = []; fx.says = []; fx.bolts = [];
@@ -2652,7 +2652,7 @@ function checkRound() {
     if (solo) {
       if (!alive(0)) return endRound(null, { time: T });
       const crowd = rags.some(r => r.npc && !r.lost);
-      if (timed && (T >= (def.soloTime || 30) || (def.npcs && !crowd))) return endRound(0, { time: T });
+      if (timed && (T >= (def.soloTime || 30) + (G.bonusT || 0) || (def.npcs && !crowd))) return endRound(0, { time: T });
       return;
     }
     const al = G.teams.filter(alive);
@@ -2678,6 +2678,7 @@ function endRound(winner, info) {
   if (solo) {
     const pass = winner === 0;
     if (G.game === 'survival') { text = 'OUT!'; sub = `You survived ${fmtT(info.time)}`; color = '#ffc928'; }
+    else if (!pass && G.kept) { text = 'OUT!'; color = '#ffc928'; sub = `You lasted ${fmtT(info.time)}`; }
     else { text = pass ? 'CLEARED!' : 'FAILED!'; color = pass ? '#5ee08a' : '#ff3b3b'; sub = pass ? pick(['Nice bouncing', 'Too easy?', 'Legendary']) : pick(['So close', 'The trampoline wins this time', 'Try again']); }
     if (G.game === 'endless') { if (pass) G.cleared++; else G.lives--; sub += pass ? ` · ${G.cleared} cleared` : ` · ${G.lives} ${G.lives === 1 ? 'life' : 'lives'} left`; }
     if (pass && G.game === 'party') { const k = 'mini-' + def.id; if (def.rules === 'race' || def.goal) saveBest(k + '-t', info.time, false); }
@@ -2714,6 +2715,11 @@ function showMiniBanner() {
     } else if (G.game === 'endless') {
       const nb = saveBest('endless', G.cleared);
       title = `${G.cleared} cleared`; sub = nb ? 'New best run!' : `Best run: ${best.endless || 0} levels.`; color = '#2f6fe0';
+    } else if (G.kept && res.winner !== 0) {
+      // they kept going after clearing it: show how long they lasted in the end
+      const nb = saveBest('mini-' + def.id + '-last', Math.floor(res.time));
+      title = `Lasted ${fmtT(res.time)}`; color = '#f29b17';
+      sub = nb ? `New best on ${def.name}!` : `${def.name}. Best: ${fmtT(best['mini-' + def.id + '-last'])}.`;
     } else {
       title = res.winner === 0 ? 'Cleared!' : 'Not this time';
       color = res.winner === 0 ? '#3ccf8e' : '#ec4a2f';
@@ -2726,6 +2732,8 @@ function showMiniBanner() {
   }
   $('#bTitle').textContent = title; $('#bTitle').style.color = color; $('#bSub').textContent = sub;
   const btns = [['Play again', startGame]];
+  // cleared a survival level solo? keep surviving in the same round
+  if (G.game === 'party' && res.solo && res.winner === 0 && (def.rules === 'survive' || def.rules === 'brawl')) btns.unshift(['Keep going', keepGoing]);
   if (G.game === 'party') btns.push(['Next level', () => { settings.mini = (settings.mini + 1) % MINIS.length; saveSettings(); startGame(); }, true]);
   btns.push(['Menu', openMenu, true]);
   for (const [label, fn, alt] of btns) {
@@ -2737,6 +2745,17 @@ function showMiniBanner() {
   $('#banner').hidden = false;
   box.firstChild.focus({ preventScroll: true });
   if (!res.solo || res.winner === 0) { for (let i = 0; i < 120; i++) fx.confetti.push({ x: rand(0, W), y: rand(-300, -10), vx: rand(-40, 40), vy: rand(60, 220), a: rand(0, 6), va: rand(-6, 6), c: pick(['#ec4a2f', '#2f6fe0', '#ffc928', '#3ccf8e', '#ff4fd8']) }); sfx.cheer(); }
+  renderHud();
+}
+
+function keepGoing() {
+  const def = G.mini, more = def.soloTime || 30;
+  $('#banner').hidden = true; fx.confetti = [];
+  G.kept = true; G.bonusT = (G.bonusT || 0) + more;
+  if (def.npcs) addHazard('crowd', { n: def.npcs, weapons: def.npcWeapons });
+  G.phase = 'live'; G.phaseT = 0;
+  G.toast = { text: 'KEEP GOING!', sub: `Another ${more} seconds. It only gets harder.`, color: '#5ee08a', t: 0 };
+  sfx.whistle();
   renderHud();
 }
 
@@ -2820,7 +2839,7 @@ function drawMiniHud() {
     mid = lim ? fmtT(Math.max(0, lim - T)) : '';
     if (def.rules !== 'race') { const f = v => def.scoreLabel === 'sec' ? Math.floor(v) : v; left = f(G.rscore[0]); right = solo ? `/ ${def.soloGoal ?? def.goal}` : f(G.rscore[1]); }
   } else {
-    const lim = solo && G.game !== 'survival' ? def.soloTime : 0;
+    const lim = solo && G.game !== 'survival' ? (def.soloTime || 30) + (G.bonusT || 0) : 0;
     mid = lim ? fmtT(Math.max(0, lim - T)) : fmtT(T);
   }
   if (G.game === 'endless' && solo) mid += `   ♥${G.lives}`;
@@ -4968,7 +4987,7 @@ function updateControls() {
   }
   const len = G.phase === 'aim' ? AIM_LEN : PLAY_LEN;
   let frac = playing() ? Math.max(0, 1 - G.phaseT / len) : 1;
-  if (isMini()) { const d = G.mini, lim = G.teams.length === 1 && G.game !== 'survival' ? (d.soloTime || d.time) : d.time; frac = G.phase === 'live' ? (lim ? Math.max(0, 1 - G.liveT / lim) : Math.max(0, 1 - G.heat / 2)) : 1; }
+  if (isMini()) { const d = G.mini, lim = G.teams.length === 1 && G.game !== 'survival' ? (d.soloTime || d.time) + (d.rules === 'survive' || d.rules === 'brawl' ? G.bonusT || 0 : 0) : d.time; frac = G.phase === 'live' ? (lim ? Math.max(0, 1 - G.liveT / lim) : Math.max(0, 1 - G.heat / 2)) : 1; }
   $('#timerFill').style.width = (frac * 100).toFixed(1) + '%';
 }
 
