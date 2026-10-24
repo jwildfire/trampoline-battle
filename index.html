@@ -161,7 +161,12 @@ body[data-skin="crayon"] .lvl .ln, body[data-skin="crayon"] .seg.games button { 
 .keycard.r b { color: var(--red); }
 .keycard.b b { color: var(--blue); }
 kbd { font: 900 12px var(--ui); color: var(--ink); background: var(--card-2); border: 2px solid var(--ink); border-bottom-width: 3px; border-radius: 6px; padding: 0 5px; }
-.go-row { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; justify-content: space-between; }
+.go-row { display: flex; flex-wrap: wrap; gap: 12px 14px; align-items: center; margin-bottom: 14px; }
+.go-row .note { flex: 1 1 200px; }
+.moreBtn { font: 900 15px var(--ui); color: var(--ink); background: var(--card-2); border: 3px solid var(--ink); border-radius: 999px; padding: 7px 14px; box-shadow: 0 3px 0 var(--ink); }
+.moreBtn[aria-expanded="true"] { background: var(--sun); }
+.moreBtn[aria-expanded="true"] span { display: inline-block; transform: rotate(180deg); }
+#moreStuff { border-top: 3px dashed var(--card-2); padding-top: 14px; }
 .note { margin: 0; font-size: 13px; color: var(--muted); flex: 1 1 260px; }
 .big {
   font-family: var(--display); font-size: 22px;
@@ -280,36 +285,40 @@ kbd { font: 900 12px var(--ui); color: var(--ink); background: var(--card-2); bo
           <button data-v="endless" aria-pressed="false"><img class="px" alt="" data-ic="dice">Endless</button>
         </div>
         <div class="row">
-          <label class="field"><span class="lab">Red team</span><input class="namein" id="name1" maxlength="12" value="Red" autocomplete="off"></label>
-          <label class="field"><span class="lab">Blue team</span><input class="namein" id="name2" maxlength="12" value="Blue" autocomplete="off"></label>
-        </div>
-        <div class="row">
           <div class="field"><span class="lab">Who's playing</span>
             <div class="seg" id="modeSeg"><button id="modeSolo" data-v="solo" aria-pressed="false">Solo</button><button id="mode2p" data-v="2p" aria-pressed="true">2 Players</button><button id="modeCpu" data-v="cpu" aria-pressed="false">vs Computer</button></div>
           </div>
-          <div class="field" id="toField"><span class="lab" id="toLab">Points to win</span>
-            <div class="seg" id="toSeg"><button data-i="0" aria-pressed="false">5</button><button data-i="1" aria-pressed="true">10</button><button data-i="2" aria-pressed="false">20</button></div>
-          </div>
         </div>
-        <div class="row">
-          <div class="field"><span class="lab">Skin</span>
-            <div class="seg" id="skinSeg"><button data-v="comics">Comics</button><button data-v="arcade">8-Bit</button><button data-v="crayon">Crayon</button></div>
-          </div>
-          <div class="field"><span class="lab">Items</span>
-            <div class="seg" id="itemSeg"><button data-v="pixel">Pixel</button><button data-v="sticker">Sticker</button></div>
-          </div>
-        </div>
-        <div class="keys">
-          <div class="keycard r"><b id="keyName1">Red</b><br><kbd>A</kbd> <kbd>D</kbd> move · <kbd>W</kbd> jump · <kbd>S</kbd> slam<br><kbd>F</kbd> punch · <kbd>E</kbd> use item<br>On the crane: <kbd>W</kbd> swap fighter, <kbd>S</kbd> drop</div>
-          <div class="keycard b" id="keyCard2"><b id="keyName2">Blue</b><br><kbd>←</kbd> <kbd>→</kbd> move · <kbd>↑</kbd> jump · <kbd>↓</kbd> slam<br><kbd>Enter</kbd> punch · <kbd>Shift</kbd> use item<br>On the crane: <kbd>↑</kbd> swap fighter, <kbd>↓</kbd> drop</div>
-        </div>
-        <div class="lab" style="margin-bottom:6px" id="lvlLab">Level</div>
-        <div class="seg tiers" id="tierSeg"><button data-v="0">Top 20</button><button data-v="1">21–50</button><button data-v="2">51–100</button></div>
-        <div class="levels" id="levels"></div>
-        <p id="lvlBlurb"></p>
         <div class="go-row">
-          <p class="note">Fighters: Normal, Big Bruno, Baby Johnnys, Chunky Chuck and Cheeky Monkey. Grab the falling <b>?</b> crates for more fighters, animals and weird weapons. Every other wave something crazy happens.<br><i id="tip"></i></p>
-          <button class="big" id="startBtn">Let's Bounce!</button>
+          <button class="big" id="startBtn">Just Bounce</button>
+          <button class="moreBtn" id="moreBtn" aria-expanded="false" aria-controls="moreStuff">More stuff <span aria-hidden="true">▾</span></button>
+          <p class="note" id="goNote">A random level, skin and items every round.</p>
+        </div>
+        <div id="moreStuff" hidden>
+          <div class="row">
+            <label class="field"><span class="lab">Red team</span><input class="namein" id="name1" maxlength="12" value="Red" autocomplete="off"></label>
+            <label class="field"><span class="lab">Blue team</span><input class="namein" id="name2" maxlength="12" value="Blue" autocomplete="off"></label>
+          </div>
+          <div class="row">
+            <div class="field" id="toField"><span class="lab" id="toLab">Points to win</span>
+              <div class="seg" id="toSeg"><button data-i="0" aria-pressed="false">5</button><button data-i="1" aria-pressed="true">10</button><button data-i="2" aria-pressed="false">20</button></div>
+            </div>
+            <div class="field"><span class="lab">Skin</span>
+              <div class="seg" id="skinSeg"><button data-v="comics">Comics</button><button data-v="arcade">8-Bit</button><button data-v="crayon">Crayon</button></div>
+            </div>
+            <div class="field"><span class="lab">Items</span>
+              <div class="seg" id="itemSeg"><button data-v="pixel">Pixel</button><button data-v="sticker">Sticker</button></div>
+            </div>
+          </div>
+          <div class="lab" style="margin-bottom:6px" id="lvlLab">Level</div>
+          <div class="seg tiers" id="tierSeg"><button data-v="0">Top 20</button><button data-v="1">21–50</button><button data-v="2">51–100</button></div>
+          <div class="levels" id="levels"></div>
+          <p id="lvlBlurb"></p>
+          <div class="keys">
+            <div class="keycard r"><b id="keyName1">Red</b><br><kbd>A</kbd> <kbd>D</kbd> move · <kbd>W</kbd> jump · <kbd>S</kbd> slam<br><kbd>F</kbd> punch · <kbd>E</kbd> use item<br>On the crane: <kbd>W</kbd> swap fighter, <kbd>S</kbd> drop</div>
+            <div class="keycard b" id="keyCard2"><b id="keyName2">Blue</b><br><kbd>←</kbd> <kbd>→</kbd> move · <kbd>↑</kbd> jump · <kbd>↓</kbd> slam<br><kbd>Enter</kbd> punch · <kbd>Shift</kbd> use item<br>On the crane: <kbd>↑</kbd> swap fighter, <kbd>↓</kbd> drop</div>
+          </div>
+          <p class="note">Fighters: Normal, Big Bruno, Baby Johnnys, Chunky Chuck and Cheeky Monkey. Grab the falling <b>?</b> crates for more fighters, animals and weird weapons.<br><i id="tip"></i></p>
         </div>
       </div>
     </div>
@@ -447,7 +456,7 @@ const LEVELS = [
 ];
 
 // ================= settings =================
-const settings = { names: ['Red', 'Blue'], mode: '2p', target: 10, level: 0, game: 'party', mini: 0, rounds: 3, pileRounds: 5, skin: 'comics', items: 'pixel' };
+const settings = { names: ['Red', 'Blue'], mode: '2p', target: 10, level: 0, game: 'party', mini: 0, rounds: 3, pileRounds: 5, skin: 'comics', items: 'pixel', more: false };
 try { Object.assign(settings, JSON.parse(localStorage.getItem('tb3-settings') || '{}')); } catch (e) {}
 function saveSettings() { try { localStorage.setItem('tb3-settings', JSON.stringify(settings)); } catch (e) {} }
 
@@ -1310,10 +1319,12 @@ const playing = () => ['aim', 'play', 'intro', 'live', 'roundEnd'].includes(G.ph
 
 function startMatch() {
   G.game = 'battle'; G.mini = null; G.hz = []; G.marks = []; G.fric = null; G.cannonsOn = false; G.dance = false; G.bigHead = false;
+  G.levelIdx = isRandom() ? (Math.random() * LEVELS.length) | 0 : settings.level;
+  randomLook();
   G.score = [0, 0];
   G.wave = 0;
   G.eventMega = false;
-  buildLevel(settings.level);
+  buildLevel(G.levelIdx);
   fx.pops = []; fx.puffs = []; fx.confetti = [];
   for (const tm of TEAMS) {
     Object.assign(tm, mkTeam(tm.t));
@@ -2525,7 +2536,8 @@ function startGame() {
 function nextRound() {
   G.round++;
   let def;
-  if (G.game === 'party') def = MINIS[settings.mini];
+  randomLook();
+  if (G.game === 'party') def = isRandom() ? endlessPick() : MINIS[settings.mini];
   else if (G.game === 'survival') def = SURVIVAL_DEF;
   else if (G.game === 'endless') {
     def = endlessPick();
@@ -2734,7 +2746,7 @@ function showMiniBanner() {
   const btns = [['Play again', startGame]];
   // cleared a survival level solo? keep surviving in the same round
   if (G.game === 'party' && res.solo && res.winner === 0 && (def.rules === 'survive' || def.rules === 'brawl')) btns.unshift(['Keep going', keepGoing]);
-  if (G.game === 'party') btns.push(['Next level', () => { settings.mini = (settings.mini + 1) % MINIS.length; saveSettings(); startGame(); }, true]);
+  if (G.game === 'party' && !isRandom()) btns.push(['Next level', () => { settings.mini = (settings.mini + 1) % MINIS.length; saveSettings(); startGame(); }, true]);
   btns.push(['Menu', openMenu, true]);
   for (const [label, fn, alt] of btns) {
     const b = document.createElement('button');
@@ -3793,7 +3805,7 @@ function buildStickers() {
 }
 // draw a sprite centered on the current origin, about `size` px across its longer side
 function drawSprite(c, name, frame, size) {
-  if (settings.items === 'sticker') {
+  if (itemStyle() === 'sticker') {
     if (ART[name]) { c.save(); ART[name](c, size / 2.4); c.restore(); return; }
     const img = STK[name][frame % STK[name].length];
     const k = size * 1.15 / Math.max(img.width, img.height);
@@ -3810,7 +3822,7 @@ const ICONS = {};
 function buildIcons() {
   for (const name in SPR) {
     const c = document.createElement('canvas');
-    if (settings.items === 'sticker') {
+    if (itemStyle() === 'sticker') {
       c.width = c.height = 96;
       const x = c.getContext('2d'); x.translate(48, 48);
       drawSprite(x, name, 0, 84);
@@ -3935,7 +3947,17 @@ const SKINS = {
 };
 const SKIN_ORDER = ['comics', 'arcade', 'crayon'];
 let FD = SKINS.comics.font, FDK = 1;
-const skin = () => settings.skin || 'comics';
+// "Just Bounce" (More stuff closed) rolls a random skin and item style each round into G.look
+const skin = () => (G.look && G.look.skin) || settings.skin || 'comics';
+const itemStyle = () => (G.look && G.look.items) || settings.items || 'pixel';
+const isRandom = () => !settings.more;
+function randomLook() {
+  if (!isRandom()) { if (G.look) { G.look = null; applySkin(); buildIcons(); } return; }
+  G.look = { skin: pick(SKIN_ORDER), items: pick(['pixel', 'sticker']) };
+  applySkin(); buildIcons();
+  padState[0] = {}; padState[1] = {};
+  renderLooks();
+}
 function applySkin() {
   const sk = SKINS[skin()] || SKINS.comics;
   PCOL[0] = sk.team[0]; PCOL[1] = sk.team[1]; PCOL_LIGHT[0] = sk.light[0]; PCOL_LIGHT[1] = sk.light[1];
@@ -4041,7 +4063,7 @@ function draw() {
   for (const r of rags) if (!r.lost && !r.active && !r.kin) drawRag(r);
   for (const r of rags) if (!r.lost && r.active) drawRag(r);
   drawHazards('front');
-  if (!isMini()) drawRail();
+  if (G.game === 'battle') drawRail();
   for (const tm of TEAMS) for (const r of tm.hanging) drawRag(r);
   drawAim();
   drawFx();
@@ -5037,6 +5059,11 @@ function buildMenu() {
     box.innerHTML = `<div class="modecard" style="grid-column:1/-1"><img class="px" alt="" src="${ICONS[ic]}"><p><b>${GAME_INFO[g][0]}.</b> ${GAME_INFO[g][1]}${extra}</p></div>`;
     $('#lvlBlurb').textContent = '';
   }
+  $('#moreStuff').hidden = !settings.more;
+  $('#moreBtn').setAttribute('aria-expanded', String(!!settings.more));
+  $('#startBtn').textContent = settings.more ? 'Just Bounce, Already' : 'Just Bounce';
+  $('#goNote').textContent = settings.more ? 'Plays exactly what you picked below.'
+    : g === 'battle' ? 'A random arena, skin and items.' : g === 'party' ? 'A random level, skin and items every round.' : 'A random skin and items every round.';
   const o = toOptions();
   $('#toLab').textContent = o.lab;
   $('#toField').hidden = g === 'endless' || (settings.mode === 'solo' && g !== 'battle' && g !== 'pileup');
@@ -5063,6 +5090,7 @@ function previewLevel() {
 }
 function openMenu() {
   G.phase = 'menu';
+  if (G.look) { G.look = null; applySkin(); buildIcons(); renderLooks(); padState[0] = {}; padState[1] = {}; }
   $('#banner').hidden = true;
   fx.confetti = []; G.toast = null;
   $('#tip').textContent = pick(['Tip: cows are not aerodynamic.', 'Tip: Baby Johnnys are small but very loud.', 'Tip: you cannot punch a tornado. We tried.',
@@ -5100,11 +5128,14 @@ function bindMenu() {
   $('#skinSeg').addEventListener('click', e => { const b = e.target.closest('button'); if (b) setLook('skin', b.dataset.v); });
   $('#itemSeg').addEventListener('click', e => { const b = e.target.closest('button'); if (b) setLook('items', b.dataset.v); });
   $('#skinBtn').addEventListener('click', () => setLook('skin', SKIN_ORDER[(SKIN_ORDER.indexOf(skin()) + 1) % SKIN_ORDER.length]));
-  $('#itemBtn').addEventListener('click', () => setLook('items', settings.items === 'sticker' ? 'pixel' : 'sticker'));
+  $('#itemBtn').addEventListener('click', () => setLook('items', itemStyle() === 'sticker' ? 'pixel' : 'sticker'));
+  $('#moreBtn').addEventListener('click', () => { ac(); sfx.click(); settings.more = !settings.more; saveSettings(); buildMenu(); previewLevel(); });
 }
 // skin and item style can change any time, even mid-game
 function setLook(k, v) {
   ac(); sfx.click();
+  // picking a look by hand wins over the random one for the rest of the round
+  if (G.look) { settings.skin = skin(); settings.items = itemStyle(); G.look = null; buildIcons(); }
   settings[k] = v; saveSettings();
   if (k === 'skin') applySkin();
   else buildIcons();
@@ -5113,7 +5144,7 @@ function setLook(k, v) {
 }
 function renderLooks() {
   $('#skinBtn').textContent = SKINS[skin()].label;
-  $('#itemBtn').textContent = settings.items === 'sticker' ? 'Sticker items' : 'Pixel items';
+  $('#itemBtn').textContent = itemStyle() === 'sticker' ? 'Sticker items' : 'Pixel items';
   for (const b of $('#skinSeg').children) b.setAttribute('aria-pressed', String(b.dataset.v === skin()));
   for (const b of $('#itemSeg').children) b.setAttribute('aria-pressed', String(b.dataset.v === settings.items));
 }
