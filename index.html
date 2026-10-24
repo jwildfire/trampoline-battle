@@ -133,6 +133,9 @@ body[data-skin="crayon"] .lvl .ln, body[data-skin="crayon"] .seg.games button { 
 .seg button[aria-pressed="true"] { background: var(--sun); }
 .levels { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-bottom: 8px; }
 .seg.games { margin-bottom: 14px; flex-wrap: wrap; }
+.seg.tiers { margin-bottom: 8px; max-width: 420px; }
+.seg.tiers button { padding: 4px 8px; font-size: 13px; }
+.lvl .rk { font: 900 10px var(--ui); color: var(--muted); }
 .seg.games button { display: flex; align-items: center; justify-content: center; gap: 6px; font-family: var(--display); font-weight: 400; font-size: 13px; padding: 8px 8px; }
 .seg.games img { width: 24px; height: 24px; }
 .lvl .tagr { font: 900 10px var(--ui); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
@@ -301,6 +304,7 @@ kbd { font: 900 12px var(--ui); color: var(--ink); background: var(--card-2); bo
           <div class="keycard b" id="keyCard2"><b id="keyName2">Blue</b><br><kbd>←</kbd> <kbd>→</kbd> move · <kbd>↑</kbd> jump · <kbd>↓</kbd> slam<br><kbd>Enter</kbd> punch · <kbd>Shift</kbd> use item<br>On the crane: <kbd>↑</kbd> swap fighter, <kbd>↓</kbd> drop</div>
         </div>
         <div class="lab" style="margin-bottom:6px" id="lvlLab">Level</div>
+        <div class="seg tiers" id="tierSeg"><button data-v="0">Top 20</button><button data-v="1">21–50</button><button data-v="2">51–100</button></div>
         <div class="levels" id="levels"></div>
         <p id="lvlBlurb"></p>
         <div class="go-row">
@@ -883,6 +887,8 @@ function touch(p, q) {
     if (it.type !== 'item' || it.dead) continue;
     const o = op.body, ip = it.p;
     const dir = Math.sign(op.x - ip.x) || (Math.random() < .5 ? -1 : 1);
+    // items added by later levels bring their own touch behaviour
+    if (ITEMS[it.kind].onTouch) { ITEMS[it.kind].onTouch(it, o, ip, dir, op); continue; }
     switch (it.kind) {
       case 'crate':
         if (o.type === 'rag' && !o.lost && !o.kin && playing()) {
@@ -1601,6 +1607,8 @@ function updateItems(dt) {
     const p = it.p, v = vel(p);
     const grounded = p.bedT < 12 || p.supT < 12;
     const target = nearestTarget(it);
+    // items added by later levels can move themselves; returning false means they removed themselves
+    if (ITEMS[it.kind].update && ITEMS[it.kind].update(it, dt, target) === false) continue;
     switch (it.kind) {
       case 'chicken':
         if (it.age > it.life) { addVel(p, 0, -G0 * grav * dt * 2); if (p.y < -60) removeItem(it, false); continue; }
@@ -2478,6 +2486,11 @@ const MINIS = [
     } },
 ];
 
+// ================= more levels (ranks 21-100) =================
+// They are in the menu like the rest, but rarer in Endless: see endlessPick().
+// <<EXTRA LEVELS>>
+MINIS.forEach((m, i) => { m.rank = m.rank || i + 1; });
+
 // Survival: one long run that adds a new hazard every 10 seconds
 const SURVIVAL_DEF = { id: 'survival', name: 'Survival', icon: 'heart', rules: 'survive', noPunch: true, heatTime: 80,
   howto: 'No fighting. Just survive. Something new every 10 seconds.', blurb: '',
@@ -2504,7 +2517,7 @@ const fmtT = t => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2
 
 function startGame() {
   G.game = settings.game;
-  G.score = [0, 0]; G.round = 0; G.lives = 3; G.cleared = 0; G.cards = []; G.endlessBag = [];
+  G.score = [0, 0]; G.round = 0; G.lives = 3; G.cleared = 0; G.cards = []; G.endlessBag = []; G.sched = [];
   $('#banner').hidden = true;
   if (G.game === 'battle') { startMatch(); return; }
   nextRound();
@@ -2515,13 +2528,27 @@ function nextRound() {
   if (G.game === 'party') def = MINIS[settings.mini];
   else if (G.game === 'survival') def = SURVIVAL_DEF;
   else if (G.game === 'endless') {
-    if (!G.endlessBag.length) G.endlessBag = shuffle(MINIS.map((_, i) => i));
-    def = MINIS[G.endlessBag.pop()];
+    def = endlessPick();
   } else {
     if (G.round > 1) { const left = PILE_DECK.filter(k => !G.cards.includes(k)); G.cards.push(pick(left.length ? left : PILE_DECK)); }
     def = pileupDef();
   }
   startRound(def);
+}
+// Endless deals rounds in blocks of 10: one level from ranks 51-100, two from 21-50 and seven from the top 20
+function endlessPick() {
+  if (!G.sched || !G.sched.length) G.sched = shuffle(['low', 'mid', 'mid', 'top', 'top', 'top', 'top', 'top', 'top', 'top']);
+  const tier = G.sched.pop();
+  const inTier = m => tier === 'top' ? m.rank <= 20 : tier === 'mid' ? m.rank > 20 && m.rank <= 50 : m.rank > 50;
+  let pool = MINIS.filter(m => inTier(m) && m !== G.mini);
+  if (!pool.length) pool = MINIS.filter(m => m.rank <= 20 && m !== G.mini);
+  if (tier === 'top') {
+    // the top 20 come out of a shuffled bag so they don't repeat
+    G.endlessBag = (G.endlessBag || []).filter(m => pool.includes(m));
+    if (!G.endlessBag.length) G.endlessBag = shuffle(pool.slice());
+    return G.endlessBag.pop();
+  }
+  return pick(pool);
 }
 function teamsFor(def) { return settings.mode === 'solo' && !def.vs ? [0] : [0, 1]; }
 function startRound(def) {
@@ -4952,7 +4979,7 @@ const GAME_INFO = {
   party: ['Party Levels', '20 mini-games on trampolines: survive, brawl, race, collect, play ball.'],
   survival: ['Survival', 'No fighting. Just stay on. Every 10 seconds something new joins in: cows, cannons, sweepers, lava…'],
   pileup: ['Pile-Up', 'Start with nothing. Every round adds one more chaos card, and they all stay. The last rounds get very silly.'],
-  endless: ['Endless', 'Thrown into a random party level, then another, then another. Solo: 3 lives, how far can you get?'],
+  endless: ['Endless', 'Thrown into a random party level, then another, then another. The rare levels from the bottom of the list turn up about once every 10 rounds. Solo: 3 lives, how far can you get?'],
 };
 function toOptions() {
   if (settings.game === 'battle') return { lab: 'Points to win', vals: [5, 10, 20], key: 'target' };
@@ -4967,11 +4994,16 @@ function buildMenu() {
   if (g === 'battle' || g === 'party') {
     const list = g === 'battle' ? LEVELS : MINIS, sel = g === 'battle' ? settings.level : settings.mini;
     $('#lvlLab').textContent = g === 'battle' ? 'Arena' : 'Level';
+    // party levels are split into three shelves: the top 20, ranks 21-50 and ranks 51-100
+    const tier = settings.tier || 0, inTier = L => tier === 0 ? L.rank <= 20 : tier === 1 ? L.rank > 20 && L.rank <= 50 : L.rank > 50;
+    $('#tierSeg').hidden = g !== 'party' || MINIS.length <= 20;
+    for (const b of $('#tierSeg').children) b.setAttribute('aria-pressed', String(+b.dataset.v === tier));
     list.forEach((L, i) => {
+      if (g === 'party' && MINIS.length > 20 && !inTier(L)) return;
       const b = document.createElement('button');
       b.className = 'lvl'; b.id = 'lvl-' + i;
       b.setAttribute('aria-pressed', String(sel === i));
-      b.innerHTML = `<img class="px" alt="" src="${ICONS[L.icon]}"><span class="ln">${L.name}</span>${L.rules ? `<span class="tagr">${RULE_TAG[L.rules]}</span>` : ''}`;
+      b.innerHTML = `<img class="px" alt="" src="${ICONS[L.icon] || ICONS.crate}"><span class="ln">${L.name}</span>${L.rules ? `<span class="tagr">${L.rank ? '#' + L.rank + ' · ' : ''}${RULE_TAG[L.rules]}</span>` : ''}`;
       b.addEventListener('click', () => { ac(); sfx.click(); if (g === 'battle') settings.level = i; else settings.mini = i; saveSettings(); buildMenu(); previewLevel(); });
       box.appendChild(b);
     });
@@ -5036,6 +5068,10 @@ function bindMenu() {
   $('#toSeg').addEventListener('click', e => {
     const b = e.target.closest('button'); if (!b) return;
     ac(); sfx.click(); const o = toOptions(); settings[o.key] = o.vals[+b.dataset.i]; saveSettings(); buildMenu(); renderHud();
+  });
+  $('#tierSeg').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    ac(); sfx.click(); settings.tier = +b.dataset.v; saveSettings(); buildMenu();
   });
   $('#gameSeg').addEventListener('click', e => {
     const b = e.target.closest('button'); if (!b) return;
