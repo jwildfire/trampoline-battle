@@ -410,6 +410,7 @@ const POSE = {
   stand: { head: [0, -50], neck: [0, -32], pelvis: [0, 0], eL: [-11, -19], hL: [-18, -5], eR: [11, -19], hR: [18, -5], kL: [-6, 21], fL: [-9, 41], kR: [6, 21], fR: [9, 41] },
   air:   { head: [0, -50], neck: [0, -32], pelvis: [0, 0], eL: [-10.2, -45.6], hL: [-17.2, -59.6], eR: [10.2, -45.6], hR: [17.2, -59.6], kL: [-7.6, 20.5], fL: [-13.7, 39.7], kR: [7.6, 20.5], fR: [13.7, 39.7] },
   hang:  { head: [0, -50], neck: [0, -32], pelvis: [0, 0], eL: [-11, -45], hL: [-10, -61], eR: [11, -45], hR: [10, -61], kL: [-6, 21], fL: [-10, 41], kR: [6, 21], fR: [10, 41] },
+  sit:   { head: [2, -50], neck: [0, -32], pelvis: [0, 0], eL: [12, -24], hL: [26, -22], eR: [14, -22], hR: [28, -20], kL: [20, -5], fL: [24, 15], kR: [22, -3], fR: [26, 17] },
 };
 const RADII = { head: 12, neck: 6, pelvis: 7, eL: 4, hL: 4, eR: 4, hR: 4, kL: 5, fL: 5, kR: 5, fR: 5 };
 const MASS = { head: 1.2, neck: 2, pelvis: 2.2, eL: .4, hL: .4, eR: .4, hR: .4, kL: .8, fL: .7, kR: .8, fR: .7 };
@@ -490,7 +491,9 @@ if (!settings.v4) Object.assign(settings, { v4: true, rounds: 0, pileRounds: 0, 
 function saveSettings() { try { localStorage.setItem('tb3-settings', JSON.stringify(settings)); } catch (e) {} }
 
 // ================= world =================
-let parts = [], rags = [], items = [], beds = [], bed = null, statics = null, movers = [], grav = 1, level = LEVELS[0];
+let parts = [], rags = [], items = [], beds = [], bed = null, statics = null, movers = [], cars = [], grav = 1, level = LEVELS[0];
+// game engines besides trampolines (racing, climbing) register themselves here
+const ENG = {};
 
 function mkP(x, y, r, m, body, tag) {
   return { x, y, px: x, py: y, r, m, w: 1 / m, body, tag, ax: 0, ay: 0, bx: 0, by: 0, bedT: 99, supT: 99, kin: false, cand: 0, under: 0, gk: 1 };
@@ -498,7 +501,7 @@ function mkP(x, y, r, m, body, tag) {
 const vel = p => ({ x: (p.x - p.px) / SDT, y: (p.y - p.py) / SDT });
 function addVel(p, vx, vy) { p.px -= vx * SDT; p.py -= vy * SDT; }
 function setVel(p, vx, vy) { p.px = p.x - vx * SDT; p.py = p.y - vy * SDT; }
-const bodyParts = b => b.type === 'rag' ? b.list : [b.p];
+const bodyParts = b => b.list || [b.p];
 function pushBody(b, vx, vy) { for (const p of bodyParts(b)) addVel(p, vx, vy); }
 
 // a level can have many trampolines; each one is a massless taut rope whose shape is the hull of whatever is pressing on it
@@ -523,12 +526,16 @@ function buildLevel(idx, def) {
   parts = []; rags = []; items = []; beds = []; movers = [];
   G.floorY = GROUND; G.windX = 0; G.bedK = 1;
   statics = { walls: [], blocks: [], bumpers: [] };
-  for (const bd of level.beds || [level.bed]) addBed(bd[0], bd[1], bd[2], bd[3]);
-  bed = beds[0];
+  cars = []; G.cam = { x: 0, y: 0, z: 1 }; G.noFloor = false; statics.grid = null; statics.segs = [];
+  for (const bd of level.beds || (level.bed ? [level.bed] : [])) addBed(bd[0], bd[1], bd[2], bd[3]);
+  bed = beds[0] || { x1: -1e5, x2: -1e5 + 1, y: 1e5, bx1: -1e5, bx2: -1e5 + 1, by: 1e5, disp: [], chain: [], holes: [], pads: [], off: true, k: 1 };
   for (const w of level.walls || []) statics.walls.push({ x1: w[0], y1: w[1], x2: w[2], y2: w[3], r: w[4] || 8, safe: w[5] });
   for (const b of level.blocks || []) statics.blocks.push({ x1: b[0], y1: b[1], x2: b[2], y2: b[3], r: b[4], style: b[5] });
   for (const b of level.bumpers || []) statics.bumpers.push({ x: b[0], y: b[1], r: b[2], flash: 0, style: b[3], col: pick(['#ff5a7a', '#ffd23f', '#6ad1ff', '#9b6bff', '#5ee08a']) });
   for (const [kind, x] of level.items || []) { const it = spawnItem(kind, x, bed.y - ITEMS[kind].r - 2, 0, 0, null); it.life = 1e9; }
+  // racing and climbing levels build their own world on top
+  G.eng = (def && ENG[def.engine]) || null;
+  if (G.eng && G.eng.build) G.eng.build(def);
 }
 // the trampoline right under a point, if any
 function bedUnder(x, y = -1e9) {
@@ -644,7 +651,9 @@ function substep() {
   }
   for (const r of rags) if (!r.kin) muscles(r);
   for (let it = 0; it < 3; it++) for (const r of rags) if (!r.kin) for (const s of r.sticks) solveStick(s);
+  if (G.eng && G.eng.sub) G.eng.sub();
   collide();
+  if (G.eng && G.eng.pin) G.eng.pin();
 }
 
 function bedForces() {
@@ -790,6 +799,7 @@ function collide() {
   const bodies = [];
   for (const r of rags) if (!r.kin) bodies.push(r);
   for (const it of items) if (!it.p.kin) bodies.push(it);
+  for (const c of cars) if (!c.dead) bodies.push(c);
   for (const b of bodies) {
     let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
     for (const p of bodyParts(b)) {
@@ -797,6 +807,8 @@ function collide() {
       for (const k of statics.blocks) if (!k.bed || !k.bed.off) capsule(p, k, false);
       for (const k of statics.bumpers) bumper(p, k);
       for (const m of movers) if (m.on) moverHit(p, m);
+      if (statics.grid) { const cell = statics.grid.get(Math.floor(p.x / 160)); if (cell) for (const k of cell) if (!k.off) capsule(p, k, false); }
+      if (G.noFloor) { if (p.x - p.r < x0) x0 = p.x - p.r; if (p.x + p.r > x1) x1 = p.x + p.r; if (p.y - p.r < y0) y0 = p.y - p.r; if (p.y + p.r > y1) y1 = p.y + p.r; continue; }
       if (p.y > G.floorY - p.r) {
         const vx = p.x - p.px, vy = p.y - p.py;
         if (G.floorY < GROUND) {
@@ -813,7 +825,7 @@ function collide() {
       if (p.y - p.r < y0) y0 = p.y - p.r; if (p.y + p.r > y1) y1 = p.y + p.r;
     }
     b.bb = [x0, y0, x1, y1];
-    if (b.type === 'rag' && (b.p.pelvis.x < -220 || b.p.pelvis.x > W + 220)) loseBody(b, 'space');
+    if (!G.noFloor && b.type === 'rag' && (b.p.pelvis.x < -220 || b.p.pelvis.x > W + 220)) loseBody(b, 'space');
   }
   for (let i = 0; i < bodies.length; i++) {
     const A = bodies[i]; if (A.lost || A.dead) continue;
@@ -823,6 +835,8 @@ function collide() {
       const b = B.bb;
       if (a[0] > b[2] || b[0] > a[2] || a[1] > b[3] || b[1] > a[3]) continue;
       // fighters squish into each other softly, so a light one isn't squirted away
+      // a driver doesn't collide with their own car
+      if (A.ignore === B || B.ignore === A) continue;
       const soft = A.type === 'rag' && B.type === 'rag' ? .35 : 1;
       for (const p of bodyParts(A)) for (const q of bodyParts(B)) {
         const dx = q.x - p.x, dy = q.y - p.y, rr = p.r + q.r;
@@ -841,6 +855,8 @@ function collide() {
 }
 
 function capsule(p, c, deadly) {
+  // one-way ledges only catch things coming down onto them (and let you drop through on purpose)
+  if (c.oneway && (p.py + p.r > Math.min(c.y1, c.y2) - c.r + 3 || (p.body.dropT || 0) > G.t)) return;
   const ex = c.x2 - c.x1, ey = c.y2 - c.y1, L2 = ex * ex + ey * ey || 1;
   const t = clamp(((p.x - c.x1) * ex + (p.y - c.y1) * ey) / L2, 0, 1);
   const cx = c.x1 + ex * t, cy = c.y1 + ey * t;
@@ -849,11 +865,12 @@ function capsule(p, c, deadly) {
   if (d2 >= rr * rr) return;
   const d = Math.sqrt(d2) || .01, nx = dx / d, ny = dy / d;
   p.x = cx + nx * rr; p.y = cy + ny * rr;
-  if (ny < -.5) p.supT = 0;
+  if (ny < -.5) { p.supT = 0; p.onSeg = c; if (c.vx) p.x += c.vx * SDT; if (c.touchFn) c.touchFn(p); }
+  if (c.wall && Math.abs(nx) > .7) { p.body.wallT = G.t; p.body.wallDir = Math.sign(nx); }
   const vx = p.x - p.px, vy = p.y - p.py, vn = vx * nx + vy * ny;
   if (vn < 0) {
-    const tx = vx - vn * nx, ty = vy - vn * ny;
-    p.px = p.x - (tx * .9 - vn * nx * .35); p.py = p.y - (ty * .9 - vn * ny * .35);
+    const tx = vx - vn * nx, ty = vy - vn * ny, keep = c.slide ?? p.slide ?? .9, bounce = c.bounce ?? .35;
+    p.px = p.x - (tx * keep - vn * nx * bounce); p.py = p.y - (ty * keep - vn * ny * bounce);
   }
   if (deadly && p.body.type === 'rag') loseBody(p.body, 'wall');
 }
@@ -904,6 +921,7 @@ const massK = r => 1 / Math.pow(r.def.mass, .45);
 // what happens when two things bump into each other
 function touch(p, q) {
   const A = p.body, B = q.body;
+  if ((A.type === 'car' || B.type === 'car') && G.eng && G.eng.touch) { G.eng.touch(A, B, p, q); return; }
   if (A.type === 'rag' && B.type === 'rag') {
     for (const [s, o, sp] of [[A, B, p], [B, A, q]]) {
       if (s.kind === 'fat' && !s.lost && !o.lost && s.team !== o.team && (sp.tag === 'pelvis' || sp.tag === 'neck') && s.bellyT < G.t) {
@@ -1278,6 +1296,7 @@ function windTick(r, dt) {
 }
 // jump just as you land on a trampoline and you bounce higher than you came in, like a real one
 function jump(r) {
+  if (isMini() && G.eng && G.eng.jump && G.eng.jump(r)) return;
   if (!r.touch || r.jumpCD > 0 || r.lost) return;
   r.jumpCD = .3;
   if (!isMini()) { pushBody(r, r.move * 160, -640 * r.def.hop); sfx.jump(); return; }
@@ -2634,6 +2653,7 @@ function startRound(def) {
   renderHud();
 }
 function spawnPlayer(t) {
+  if (G.eng && G.eng.spawn) return G.eng.spawn(t);
   const def = G.mini, sp = (def.spawn && def.spawn[t]) || [];
   const b = bed, x = sp[0] ?? (t ? b.x1 + (b.x2 - b.x1) * .72 : b.x1 + (b.x2 - b.x1) * .28), y = sp[1] ?? b.y - 280;
   const r = makeRag(t, def.body || 'normal', x, y, 'air');
@@ -2883,6 +2903,7 @@ function aiJump(r) {
 }
 function aiMini(r, dt) {
   const def = G.mini;
+  if (G.eng && G.eng.ai && G.eng.ai(r, dt)) return;
   let goal = def.cpu && r.team < 2 ? def.cpu(r) : null;
   const here = bedUnder(r.p.pelvis.x, r.p.pelvis.y);
   let jumpNow = false;
@@ -3001,7 +3022,7 @@ function frame(dt) {
     r.punchT -= dt; r.punchCD -= dt; r.jumpCD -= dt; r.boingCD -= dt;
     r.touch = r.list.some(p => p.bedT < 16 || p.supT < 16);
     if (r.touch && r.slam && vel(r.p.pelvis).y < 200) r.slam = false;
-    r.pose = r.touch ? 'stand' : 'air';
+    r.pose = r.seat ? 'sit' : r.touch ? 'stand' : 'air';
     if (r.lost) { r.lostT += dt; continue; }
     if (r.blowT > 0) windTick(r, dt);
     if (r.kind === 'monkey' && playing() && (r.bananaT -= dt) <= 0) {
@@ -3015,7 +3036,8 @@ function frame(dt) {
         pop(pick(['OOK!', 'EEK!', 'CATCH!']), r.p.head.x, r.p.head.y - 30, tc(r.team), 16);
       }
     }
-    if (mini) {
+    if (mini && r.seat) r.move = 0;
+    else if (mini) {
       if (r.active && !isCpu(r.team)) { const d = teamDir(r.team); r.move = d; if (d) r.face = d; }
       else if (G.phase === 'live') aiMini(r, dt);
       else r.move = 0;
@@ -3028,11 +3050,13 @@ function frame(dt) {
     const v = vel(r.p.pelvis);
     r.walk = r.touch && Math.abs(v.x) > 50;
     if (r.move) {
-      const acc = r.touch ? 1700 : 600, cap = 300 * r.def.speed;
+      const acc = r.touch ? 1700 : 600, cap = 300 * r.def.speed * (G.eng && G.eng.speedK || 1);
       if (Math.sign(v.x) !== r.move || Math.abs(v.x) < cap) for (const p of r.list) p.ax = r.move * acc;
     }
   }
+  if (mini && G.eng && G.eng.pre) G.eng.pre(dt);
   for (let s = 0; s < SUB; s++) substep();
+  if (mini && G.eng && G.eng.post) G.eng.post(dt);
   updateItems(dt);
   updateBedDisplay(dt);
   for (const b of statics.bumpers) b.flash -= dt;
@@ -4168,21 +4192,29 @@ function draw() {
   ctx.save();
   if (shakeAmt > .3) ctx.translate(rand(-shakeAmt, shakeAmt), rand(-shakeAmt, shakeAmt));
   drawBackdrop();
+  // the camera: racing and climbing scroll and zoom, trampolines stay put
+  const cam = G.cam || { x: 0, y: 0, z: 1 };
+  ctx.save(); ctx.scale(cam.z, cam.z); ctx.translate(-cam.x, -cam.y);
   drawShadows();
+  if (G.eng && G.eng.drawWorld) G.eng.drawWorld('back');
   drawStatics();
   drawHazards('back');
   drawTrampoline();
   drawHazards('bed');
+  if (G.eng && G.eng.drawWorld) G.eng.drawWorld('mid');
   for (const r of rags) if (r.lost) drawRag(r);
   for (const it of items) drawItem(it);
   for (const r of rags) if (!r.lost && !r.active && !r.kin) drawRag(r);
   for (const r of rags) if (!r.lost && r.active) drawRag(r);
   drawHazards('front');
+  if (G.eng && G.eng.drawWorld) G.eng.drawWorld('front');
   if (G.game === 'battle') drawRail();
   for (const tm of TEAMS) for (const r of tm.hanging) drawRag(r);
   drawAim();
   drawFx();
+  ctx.restore();
   drawOffscreen();
+  if (G.eng && G.eng.drawHud) G.eng.drawHud();
   drawMiniHud();
   drawToast();
   ctx.restore();
@@ -4211,6 +4243,7 @@ function drawSun(x, y, r) {
   circle(x, y, r + 3, INK); circle(x, y, r, '#ffe066'); circle(x - r * .3, y - r * .3, r * .3, '#fff3a8');
 }
 function drawBackdrop() {
+  if (G.eng && G.eng.backdrop) { G.eng.backdrop(); return; }
   if (skin() === 'crayon') { drawPaper(); ctx.globalAlpha = .8; }
   else {
     const sk = ctx.createLinearGradient(0, 0, 0, GROUND);
@@ -4356,6 +4389,7 @@ function drawBackdrop() {
 
 // soft shadows on the ground under everything that flies
 function drawShadows() {
+  if (G.eng) return;
   const sh = (x, y, w) => {
     const h = clamp(GROUND - y, 0, 600);
     ctx.globalAlpha = clamp(.3 - h / 1600, .05, .3);
@@ -5053,6 +5087,7 @@ function drawToast() {
 }
 
 function drawOffscreen() {
+  if (G.eng) return;
   for (const r of rags) {
     if (r.lost || r.kin) continue;
     const h = r.p.head;
@@ -5115,7 +5150,8 @@ function updateControls() {
     const air = tm.dropped && !live(t).some(r => r.touch);
     const up = hanging ? 'SWAP' : air ? 'SLAM' : 'JUMP';
     const np = isMini() && G.mini.noPunch;
-    const hit = hanging ? 'DROP' : np ? 'SLAM' : 'PUNCH';
+    let hit = hanging ? 'DROP' : np ? 'SLAM' : 'PUNCH';
+    if (isMini() && G.eng && G.eng.hitLabel) hit = G.eng.hitLabel(t) || hit;
     const item = isMini() ? '' : tm.items[0] || '';
     const key = `${up}|${hit}|${item}|${human}|${tm.dropped}|${live(t).length}`;
     if (st.key === key) continue;
@@ -5299,6 +5335,7 @@ function press(t, a) {
   const tm = TEAMS[t];
   if (isMini()) {
     const lv = live(t), np = G.mini && G.mini.noPunch;
+    if (G.eng && G.eng.press && G.eng.press(t, a, lv)) return;
     if (a === 'up') lv.forEach(jump);
     else if (a === 'down') lv.forEach(slam);
     else if (a === 'punch' && G.phase !== 'live') return;
@@ -5333,10 +5370,14 @@ addEventListener('keydown', e => {
   if (!m) return;
   const [t, a] = m;
   if (a === 'left' || a === 'right') TEAMS[t].held[a] = true;
-  else press(t, a);
+  else { if (a === 'up' || a === 'down') TEAMS[settings.mode !== '2p' ? 0 : t].held[a] = true; press(t, a); }
 });
-addEventListener('keyup', e => { const m = KEYMAP[e.code]; if (m && (m[1] === 'left' || m[1] === 'right')) TEAMS[m[0]].held[m[1]] = false; });
-addEventListener('blur', () => { for (const tm of TEAMS) { tm.held.left = tm.held.right = false; tm.pad = 0; } });
+addEventListener('keyup', e => {
+  const m = KEYMAP[e.code];
+  if (m && (m[1] === 'left' || m[1] === 'right')) TEAMS[m[0]].held[m[1]] = false;
+  if (m && (m[1] === 'up' || m[1] === 'down')) TEAMS[settings.mode !== '2p' ? 0 : m[0]].held[m[1]] = false;
+});
+addEventListener('blur', () => { for (const tm of TEAMS) { tm.held.left = tm.held.right = tm.held.up = tm.held.down = false; tm.pad = 0; } });
 
 // on-screen pads
 for (const t of [0, 1]) {
@@ -5346,9 +5387,10 @@ for (const t of [0, 1]) {
       e.preventDefault(); if (b.disabled) return;
       b.setPointerCapture(e.pointerId); b.classList.add('held');
       if (a === 'left' || a === 'right') TEAMS[t].pad = a === 'left' ? -1 : 1;
+      if (a === 'up') TEAMS[settings.mode !== '2p' ? 0 : t].held.up = true;
       else press(t, a === 'up' ? (G.phase === 'aim' && !TEAMS[settings.mode !== '2p' ? 0 : t].dropped ? 'up' : 'jumpOrSlam') : a);
     });
-    const off = () => { b.classList.remove('held'); if ((a === 'left' && TEAMS[t].pad === -1) || (a === 'right' && TEAMS[t].pad === 1)) TEAMS[t].pad = 0; };
+    const off = () => { b.classList.remove('held'); if ((a === 'left' && TEAMS[t].pad === -1) || (a === 'right' && TEAMS[t].pad === 1)) TEAMS[t].pad = 0; if (a === 'up') TEAMS[settings.mode !== '2p' ? 0 : t].held.up = false; };
     b.addEventListener('pointerup', off); b.addEventListener('pointercancel', off);
     b.addEventListener('keydown', e => { if (e.code === 'Space' || e.code === 'Enter') e.preventDefault(); });
   }
