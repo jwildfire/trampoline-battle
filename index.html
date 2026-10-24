@@ -92,13 +92,13 @@ body[data-skin="crayon"] .lvl .ln, body[data-skin="crayon"] .seg.games button { 
 
 /* ---------- stage ---------- */
 #stage { flex: 1; min-height: 0; position: relative; display: grid; place-items: center; }
+/* the canvas covers the whole window: the play area sits where the stage is, and the level's sky and ground run out to the edges behind the scores and buttons */
 #cv {
-  display: block;
-  border: 3px solid var(--ink); border-radius: 16px;
-  box-shadow: 0 6px 0 var(--ink);
+  display: block; position: fixed; left: 0; top: 0; z-index: 0;
   touch-action: none;
-  background: #7cc8ff;
+  background: var(--night);
 }
+#hud, #bar { position: relative; z-index: 1; }
 #rotateTip { display: none; }
 .overlay { position: absolute; inset: 0; display: grid; place-items: center; padding: 10px; overflow-y: auto; }
 .panel {
@@ -17041,16 +17041,19 @@ function skinWord(t) {
 // ================= rendering =================
 const cv = $('#cv'), mainCtx = cv.getContext('2d');
 let ctx = mainCtx;
-let scale = 1, dpr = 1;
+// scale: logical game units to CSS px; offX/offY: where the 960x600 play area sits in the window; pr: canvas pixels per CSS px
+let scale = 1, dpr = 1, offX = 0, offY = 0, pr = 1;
 // crayon draws into an offscreen canvas first, then copies it across with a hand-drawn wobble
 const offA = document.createElement('canvas'), offB = document.createElement('canvas');
 function resize() {
-  const st = $('#stage').getBoundingClientRect();
-  scale = Math.max(.2, Math.min((st.width - 6) / W, (st.height - 12) / H));
+  const st = $('#stage').getBoundingClientRect(), vw = innerWidth, vh = innerHeight;
+  scale = Math.max(.2, Math.min(st.width / W, st.height / H));
+  offX = st.left + (st.width - W * scale) / 2; offY = st.top + (st.height - H * scale) / 2;
   dpr = Math.min(window.devicePixelRatio || 1, 2);
-  cv.style.width = W * scale + 'px'; cv.style.height = H * scale + 'px';
-  if (skin() === 'arcade') { cv.width = W / 3; cv.height = H / 3; }
-  else { cv.width = Math.round(W * scale * dpr); cv.height = Math.round(H * scale * dpr); }
+  // 8-bit draws three game units to a pixel
+  pr = skin() === 'arcade' ? 1 / (3 * scale) : dpr;
+  cv.style.width = vw + 'px'; cv.style.height = vh + 'px';
+  cv.width = Math.round(vw * pr); cv.height = Math.round(vh * pr);
   offA.width = offB.width = cv.width; offA.height = offB.height = cv.height;
 }
 // the 16-color PICO-8 palette, looked up through a 15-bit color cube
@@ -17109,12 +17112,13 @@ const clouds = Array.from({ length: 5 }, (_, i) => [i * 230 + rand(0, 80), rand(
 function draw() {
   const sk = skin();
   ctx = sk === 'crayon' ? offA.getContext('2d') : mainCtx;
-  if (sk === 'arcade') ctx.setTransform(1 / 3, 0, 0, 1 / 3, 0, 0);
-  else ctx.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
+  ctx.setTransform(scale * pr, 0, 0, scale * pr, offX * pr, offY * pr);
   ctx.imageSmoothingEnabled = sk !== 'arcade';
   ctx.save();
   if (shakeAmt > .3) ctx.translate(rand(-shakeAmt, shakeAmt), rand(-shakeAmt, shakeAmt));
+  bleedFill();
   drawBackdrop();
+  bleed();
   // the camera: racing and climbing scroll and zoom, trampolines stay put
   const cam = G.cam || { x: 0, y: 0, z: 1 };
   ctx.save(); ctx.scale(cam.z, cam.z); ctx.translate(-cam.x, -cam.y);
@@ -17145,6 +17149,33 @@ function draw() {
   if (flashT > 0) { ctx.fillStyle = `rgba(255,240,200,${flashT * 4})`; ctx.fillRect(0, 0, W, H); }
   if (sk === 'crayon') { crayonCopy(); ctx = mainCtx; }
   else if (sk === 'arcade') pixelate();
+}
+// the window around the play area: the level's sky and ground carried out to the edges, the top and bottom edges of the
+// backdrop stretched out (sky above, ground below), and a light dimming so the real play area still reads
+function bleedFill() {
+  const big = 4000, sky = level.sky || ['#7ec0ff', '#e6f6ff'], gr = level.ground || [level.groundCol || '#5cbf4a', level.groundCol || '#3f9a33'];
+  if (skin() === 'crayon') { ctx.fillStyle = '#efe6cf'; ctx.fillRect(-big, -big, W + 2 * big, H + 2 * big); return; }
+  const g = ctx.createLinearGradient(0, 0, 0, GROUND);
+  g.addColorStop(0, skin() === 'arcade' ? '#000000' : sky[0]); g.addColorStop(1, skin() === 'arcade' ? sky[0] : sky[1]);
+  ctx.fillStyle = g; ctx.fillRect(-big, -big, W + 2 * big, GROUND + big);
+  const g2 = ctx.createLinearGradient(0, GROUND, 0, H);
+  g2.addColorStop(0, gr[0]); g2.addColorStop(1, gr[1] || gr[0]);
+  ctx.fillStyle = g2; ctx.fillRect(-big, GROUND, W + 2 * big, big);
+}
+function bleed() {
+  const c = ctx, src = c.canvas, cw = src.width, ch = src.height;
+  const x0 = Math.max(0, Math.round(offX * pr)), y0 = Math.max(0, Math.round(offY * pr));
+  const x1 = Math.min(cw, Math.round((offX + W * scale) * pr)), y1 = Math.min(ch, Math.round((offY + H * scale) * pr));
+  if (x1 - x0 < 4 || y1 - y0 < 4) return;
+  c.save(); c.setTransform(1, 0, 0, 1, 0, 0); c.imageSmoothingEnabled = false;
+  if (y0 > 0) c.drawImage(src, x0, y0 + 1, x1 - x0, 1, x0, 0, x1 - x0, y0);
+  if (y1 < ch) c.drawImage(src, x0, y1 - 2, x1 - x0, 1, x0, y1, x1 - x0, ch - y1);
+  const fade = (gx0, gy0, gx1, gy1, x, y, w, h) => { const g = c.createLinearGradient(gx0, gy0, gx1, gy1); g.addColorStop(0, 'rgba(22,19,44,0)'); g.addColorStop(1, 'rgba(22,19,44,.28)'); c.fillStyle = g; c.fillRect(x, y, w, h); };
+  if (y0 > 0) fade(0, y0, 0, 0, 0, 0, cw, y0);
+  if (y1 < ch) fade(0, y1, 0, ch, 0, y1, cw, ch - y1);
+  if (x0 > 0) fade(x0, 0, 0, 0, 0, y0, x0, y1 - y0);
+  if (x1 < cw) fade(x1, 0, cw, 0, x1, y0, cw - x1, y1 - y0);
+  c.restore();
 }
 
 function drawCloud(x, y, s) {
@@ -17289,8 +17320,9 @@ function drawBackdrop() {
     // scribbled ground that doesn't quite reach the edges
     ctx.globalAlpha = 1; ctx.strokeStyle = level.ground[0]; ctx.lineWidth = 5; ctx.lineCap = 'round';
     ctx.beginPath(); for (let x = 10; x < W - 10; x += 9) { ctx.moveTo(x, GROUND + 4); ctx.lineTo(x + 26, H - 6); } ctx.stroke();
-  } else ctx.fillRect(-20, GROUND, W + 40, H - GROUND + 20);
-  ctx.fillStyle = INK; ctx.fillRect(-20, GROUND, W + 40, 3);
+  } else ctx.fillRect(-4000, GROUND, W + 8000, H - GROUND + 20);
+  // the ground line runs on into the margins around the play area
+  ctx.fillStyle = INK; ctx.fillRect(skin() === 'crayon' ? -20 : -4000, GROUND, skin() === 'crayon' ? W + 40 : W + 8000, 3);
   ctx.globalAlpha = 1;
   if (d === 'moon') { ctx.fillStyle = 'rgba(0,0,0,.15)'; for (const x of [120, 380, 620, 830]) { ctx.beginPath(); ctx.ellipse(x, 580, 34, 8, 0, 0, Math.PI * 2); ctx.fill(); } }
   if (d === 'lava') {
@@ -18379,7 +18411,7 @@ for (const t of [0, 1]) {
 }
 // drag on the game to slide a crane hook
 let dragTeam = -1;
-function toLogical(e) { const r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left) / scale, y: (e.clientY - r.top) / scale }; }
+function toLogical(e) { return { x: (e.clientX - offX) / scale, y: (e.clientY - offY) / scale }; }
 cv.addEventListener('pointerdown', e => {
   ac();
   if (G.phase !== 'aim') return;
