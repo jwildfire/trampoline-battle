@@ -808,7 +808,7 @@ function collide() {
       for (const k of statics.blocks) if (!k.bed || !k.bed.off) capsule(p, k, false);
       for (const k of statics.bumpers) bumper(p, k);
       for (const m of movers) if (m.on) moverHit(p, m);
-      if (statics.grid) { const cell = statics.grid.get(Math.floor(p.x / 160)); if (cell) for (const k of cell) if (!k.off) capsule(p, k, false); }
+      if (statics.grid) { const cell = statics.grid.get(Math.floor((statics.gridY ? p.y : p.x) / 160)); if (cell) for (const k of cell) if (!k.off) capsule(p, k, false); }
       if (G.noFloor) { if (p.x - p.r < x0) x0 = p.x - p.r; if (p.x + p.r > x1) x1 = p.x + p.r; if (p.y - p.r < y0) y0 = p.y - p.r; if (p.y + p.r > y1) y1 = p.y + p.r; continue; }
       if (p.y > G.floorY - p.r) {
         const vx = p.x - p.px, vy = p.y - p.py;
@@ -2618,7 +2618,9 @@ function buildTrack(def) {
 }
 function addSeg(s) {
   statics.segs.push(s);
-  const a = Math.floor((Math.min(s.x1, s.x2) - 40) / 160), b = Math.floor((Math.max(s.x1, s.x2) + 40) / 160);
+  // racing buckets segments by x, climbing (tall towers) by y
+  const lo = statics.gridY ? Math.min(s.y1, s.y2) : Math.min(s.x1, s.x2), hi = statics.gridY ? Math.max(s.y1, s.y2) : Math.max(s.x1, s.x2);
+  const a = Math.floor((lo - 40) / 160), b = Math.floor((hi + 40) / 160);
   for (let i = a; i <= b; i++) { if (!statics.grid.has(i)) statics.grid.set(i, []); statics.grid.get(i).push(s); }
 }
 // the highest ground under x (or null over a pit)
@@ -3093,6 +3095,266 @@ ENG.race = {
   hitLabel: t => { const c = cars.find(o => o.team === t && o.driver); return c && c.item ? 'USE' : 'HONK'; },
 };
 
+// ================= climbing engine =================
+// Tall towers of one-way ledges. The camera climbs with the leader (and sometimes on its own); fall off the bottom and you're out.
+// A climb level has engine: 'climb' and `ledges` ([x1, x2, y, { type }]) and/or `gen` for a generated tower. Up is negative y.
+const LEDGE_TYPES = ['normal', 'ice', 'sticky', 'conveyor', 'move', 'crumble', 'spring', 'cloud'];
+function addLedge(x1, x2, y, o = {}) {
+  const type = o.type || 'normal';
+  const L = { x1, x2, y1: y, y2: y, r: 8, oneway: type !== 'ground', ground: true, type, bx1: x1, bx2: x2, by: y, o };
+  if (type === 'ice') L.slide = .998;
+  if (type === 'sticky') L.slide = .55;
+  if (type === 'cloud') L.bounce = .95;
+  if (type === 'conveyor') L.vx = o.vx ?? (Math.random() < .5 ? -140 : 140);
+  if (type === 'move') { L.ax = o.ax ?? rand(70, 150); L.period = o.period ?? rand(3, 5); L.ph = rand(0, 6); }
+  if (type === 'crumble') L.touchFn = () => { if (!L.crT) L.crT = G.t + (o.delay ?? .55); };
+  if (type === 'spring') L.touchFn = p => {
+    const b = p.body;
+    if (b.type === 'rag' && !b.lost && (b.springT || 0) < G.t) { b.springT = G.t + .4; pushBody(b, 0, -1150 - Math.max(0, vel(b.p.pelvis).y) * .3); pop(pick(['SPROING!', 'BOING!', 'WHEEE!']), p.x, y - 40, '#7dff6a', 20); sfx.boing(1); }
+  };
+  if (o.fn) L.touchFn = o.fn;
+  addSeg(L);
+  G.climb.ledges.push(L);
+  return L;
+}
+// a random tower: ledges zig-zag up with gaps a kid can jump
+function genLedges(gen, fromY, toY) {
+  const out = [], mix = gen.mix || { normal: 7, ice: 1, crumble: 1, conveyor: 1, move: 1, spring: .6, cloud: .6, sticky: .4 };
+  const keys = Object.keys(mix), tot = keys.reduce((a, k) => a + mix[k], 0);
+  let y = fromY, cx = G.climb.lastX ?? 480;
+  while (y > toY) {
+    y -= rand(gen.gapMin ?? 95, gen.gapMax ?? 130);
+    const w = rand(gen.wMin ?? 120, gen.wMax ?? 250);
+    cx = clamp(cx + (Math.random() < .5 ? -1 : 1) * rand(120, 300), 60 + w / 2, 900 - w / 2);
+    let r = Math.random() * tot, type = 'normal';
+    for (const k of keys) { r -= mix[k]; if (r <= 0) { type = k; break; } }
+    out.push([cx - w / 2, cx + w / 2, y, { type }]);
+  }
+  G.climb.lastX = cx;
+  return out;
+}
+function climbBuild(def) {
+  G.noFloor = true; statics.grid = new Map(); statics.segs = []; statics.gridY = true;
+  const C = G.climb = { top: def.top ?? -2400, ledges: [], ladders: [], best: [0, 0], warn: [], summitBy: null, genY: 440, lastX: 480 };
+  addLedge(40, 920, 520, { type: 'ground' });
+  for (const L of def.ledges || []) addLedge(L[0], L[1], L[2], L[3] || {});
+  if (def.gen && !def.ledges) { const list = genLedges(def.gen, 440, def.gen.infinite ? -900 : C.top + 140); for (const L of list) addLedge(...L); C.genY = list.length ? list[list.length - 1][2] : 440; }
+  if (!def.gen || !def.gen.infinite) C.summit = addLedge(def.summitX1 ?? 360, def.summitX2 ?? 600, C.top, { type: 'summit' });
+  // side walls you can wall-jump off
+  for (const x of [def.wallL ?? 20, def.wallR ?? 940]) addSeg({ x1: x, y1: 900, x2: x, y2: (def.gen && def.gen.infinite ? -60000 : C.top - 900), r: 14, wall: true });
+  for (const l of def.ladders || []) C.ladders.push({ x: l[0], y1: l[1], y2: l[2] });
+  G.climbLava = def.lava ? 760 : null;
+  G.cam = { x: 0, y: 0, z: 1 };
+}
+const climbHeight = y => Math.max(0, Math.round((520 - y) / 40));
+// drop something from above the top of the screen, with a warning arrow first
+function climbDrop(kind, x, delay = .8) { G.climb.warn.push({ kind, x: x ?? rand(80, 880), t: delay }); }
+function climbPre(dt) {
+  const C = G.climb;
+  for (const L of C.ledges) {
+    if (L.type === 'move') { const nx = L.bx1 + L.ax * Math.sin(G.t * 2 * Math.PI / L.period + L.ph); L.vx = (nx - L.x1) / dt; L.x2 = nx + (L.bx2 - L.bx1); L.x1 = nx; }
+    if (L.crT && G.t > L.crT && !L.off) { L.off = true; L.backT = G.t + 4; puffs((L.x1 + L.x2) / 2, L.y1, 10, '#b8a58a'); sfx.kick(); }
+    if (L.off && L.backT && G.t > L.backT) { L.off = false; L.crT = 0; L.backT = 0; }
+  }
+  // ladders: hold up to climb
+  for (const r of rags) {
+    if (r.lost || r.kin) continue;
+    const held = r.team < 2 && !isCpu(r.team) ? TEAMS[settings.mode !== '2p' ? 0 : r.team].held.up : r.wantUp;
+    r.onLadder = false;
+    for (const l of C.ladders) if (Math.abs(r.p.pelvis.x - l.x) < 22 && r.p.pelvis.y > l.y2 - 20 && r.p.pelvis.y < l.y1 + 30) {
+      if (held) { r.onLadder = true; for (const p of r.list) { const v = vel(p); setVel(p, v.x * .6 + (l.x - r.p.pelvis.x) * 2, -230); } }
+    }
+  }
+  for (const w of C.warn) {
+    w.t -= dt;
+    if (w.t <= 0 && !w.done) { w.done = true; const it = spawnItem(w.kind, w.x, G.cam.y - 60, rand(-30, 30), 250, -1); if (w.kind === 'bomb') { it.lit = true; it.fuse = rand(1.6, 2.4); } }
+  }
+  C.warn = C.warn.filter(w => !w.done);
+}
+function climbPost(dt) {
+  const C = G.climb, def = G.mini, live = G.phase === 'live', cam = G.cam;
+  // more tower as you go, for the never-ending ones
+  if (def.gen && def.gen.infinite) while (C.genY > cam.y - 500) { const list = genLedges(def.gen, C.genY, C.genY - 400); for (const L of list) addLedge(...L); C.genY = list[list.length - 1][2]; }
+  let top = 1e9;
+  for (const t of G.teams) for (const r of TEAMS[t].active) if (!r.lost) { top = Math.min(top, r.p.pelvis.y); C.best[t] = Math.max(C.best[t], climbHeight(r.p.pelvis.y)); }
+  if (top < 1e9) { const ty = top - H * .45; if (ty < cam.y) cam.y += (ty - cam.y) * Math.min(1, dt * 3); }
+  if (live && def.scroll) cam.y -= def.scroll * (1 + G.heat * .5) * dt;
+  if (C.summit) cam.y = Math.max(cam.y, C.top - 140);
+  if (G.climbLava != null && live) {
+    G.climbLava = Math.min(G.climbLava, cam.y + H + 80) - (def.lavaSpeed ?? 18) * (1 + G.heat) * dt;
+  }
+  for (const r of rags) {
+    if (r.lost || r.kin) continue;
+    const y = r.p.pelvis.y;
+    if (y > cam.y + H + 40) loseBody(r, 'fell');
+    else if (G.climbLava != null && y > G.climbLava) loseBody(r, 'lava');
+    else if (live && C.summit && r.team < 2 && C.summitBy == null && y < C.top + 10 && r.list.some(p => p.onSeg === C.summit && p.supT < 3)) {
+      C.summitBy = r.team; pop('SUMMIT!', (C.summit.x1 + C.summit.x2) / 2, C.top - 90, tc(r.team), 34); sfx.cheer();
+      if (def.rules === 'race') miniPoint(r.team, 1, (C.summit.x1 + C.summit.x2) / 2, C.top - 130);
+    }
+  }
+  for (const it of items) if (it.p.y > cam.y + H + 200 && !it.p.kin) removeItem(it, false);
+}
+function climbSpawn(t) {
+  const def = G.mini, C = G.climb, cam = G.cam, tm = TEAMS[t], sp = def.spawn && def.spawn[t];
+  let x = sp ? sp[0] : 330 + t * 300, y = sp ? sp[1] : 420;
+  if (G.phase === 'live') {
+    // back in on a ledge low on the screen
+    const ok = C.ledges.filter(L => !L.off && L.y1 > cam.y + H * .45 && L.y1 < cam.y + H - 70 && !['crumble', 'spring', 'cloud', 'move'].includes(L.type));
+    const L = ok.length ? pick(ok) : null;
+    if (L) { x = (L.x1 + L.x2) / 2; y = L.y1 - 90; } else { x = 480; y = cam.y + H * .5; }
+  }
+  const r = makeRag(t, def.body || 'normal', x, y, 'air');
+  r.active = true; r.face = t ? -1 : 1;
+  tm.active = tm.active.filter(o => !o.lost).concat(r);
+  if (def.startWeapon) { const k = pick(WEAPON_KEYS); r.weapon = { k, uses: WEAPONS[k].uses }; }
+  if (G.phase === 'live') pop(pick(['BACK IN!', 'AGAIN!', 'UP UP UP!']), x, y - 40, tc(t), 20);
+  return r;
+}
+function climbJump(r) {
+  if (r.lost || r.jumpCD > 0) return true;
+  const v = vel(r.p.pelvis);
+  if (!r.touch) {
+    if (G.t - (r.wallT || -9) < .2) {
+      r.jumpCD = .22; const d = r.wallDir || 1;
+      for (const p of r.list) setVel(p, d * 440, -780);
+      r.face = d; pop('WALL JUMP!', r.p.head.x, r.p.head.y - 30, '#7fd6ff', 16); sfx.jump();
+    }
+    return true;
+  }
+  // running fast makes you jump higher
+  r.jumpCD = .26;
+  const sp = Math.abs(v.x), up = 700 + Math.min(430, sp * .75);
+  for (const p of r.list) { const pv = vel(p); setVel(p, pv.x * 1.05, Math.min(pv.y, 0) * .3 - up); }
+  if (sp > 380) { r.combo = (r.combo || 0) + 1; if (r.combo > 1) pop(`COMBO x${r.combo}!`, r.p.head.x, r.p.head.y - 34, '#ffc928', 16 + Math.min(r.combo, 8)); }
+  else r.combo = 0;
+  sfx.jump();
+  return true;
+}
+function climbPress(t, a, lv) {
+  if (a === 'down') { for (const r of lv) if (r.touch) { r.dropT = G.t + .35; } return false; }
+  return false;
+}
+function climbAI(r, dt) {
+  const def = G.mini, C = G.climb;
+  let goal = def.cpu && r.team < 2 ? def.cpu(r) : null;
+  const px = r.p.pelvis.x, py = r.p.pelvis.y;
+  if (!goal) {
+    let best = null, bs = 1e9;
+    for (const L of C.ledges) {
+      if (L.off || L.y1 > py - 30 || L.y1 < py - 300) continue;
+      const lx = clamp(px, L.x1 + 24, L.x2 - 24), score = Math.abs(lx - px) + (py - L.y1) * .5 + (L.type === 'crumble' ? 120 : 0);
+      if (score < bs) { bs = score; best = { x: lx, y: L.y1 }; }
+    }
+    for (const l of C.ladders) if (Math.abs(l.x - px) < 200 && py > l.y2 && py < l.y1 + 40) { best = { x: l.x, y: l.y2, ladder: true }; break; }
+    goal = best || { x: px < 480 ? 700 : 260, y: py - 120 };
+  }
+  const dx = goal.x - px;
+  r.move = Math.abs(dx) > 16 ? Math.sign(dx) : 0;
+  if (r.move) r.face = r.move;
+  r.wantUp = !!goal.ladder && Math.abs(dx) < 24;
+  if (!r.wantUp && r.touch && (goal.jump || (goal.y != null && goal.y < py - 20 && Math.abs(dx) < 70 + Math.abs(vel(r.p.pelvis).x) * .3)) && Math.random() < .35) jump(r);
+  if (!r.touch && G.t - (r.wallT || -9) < .1 && Math.random() < .3) jump(r);
+  if (goal.punch || (!def.noPunch && (r.thinkT -= dt) <= 0)) { r.thinkT = rand(.3, .7); if (nearestEnemy(r, 70 * r.s + 40)) attack(r, 1); }
+  return true;
+}
+// ---- drawing ----
+function climbBackdrop() {
+  const cam = G.cam, C = G.climb, sky = level.sky || ['#7ec0ff', '#e6f6ff'];
+  const k = clamp((520 - cam.y) / Math.max(800, 520 - (C.summit ? C.top : cam.y - 3000)), 0, 1);
+  if (skin() === 'crayon') { drawPaper(); }
+  else {
+    const mix = (a, b, t) => { const pa = parseInt(a.slice(1), 16), pb = parseInt(b.slice(1), 16); const ch = s => Math.round(((pa >> s) & 255) * (1 - t) + ((pb >> s) & 255) * t); return `rgb(${ch(16)},${ch(8)},${ch(0)})`; };
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, skin() === 'arcade' ? '#000000' : mix(sky[0], '#0b0a24', k)); g.addColorStop(1, mix(sky[1], '#2a1f5a', k));
+    ctx.fillStyle = g; ctx.fillRect(-20, -20, W + 40, H + 40);
+  }
+  // stars come out as you climb into space
+  if (k > .3) { ctx.globalAlpha = (k - .3) / .7; for (const [x, y, r, ph] of stars) { ctx.fillStyle = '#fff'; ctx.fillRect(x, ((y - cam.y * .05) % H + H) % H, r, r); } ctx.globalAlpha = 1; }
+  for (const c of clouds) { const y = ((c[1] * 2 - cam.y * .25) % (H + 200) + H + 200) % (H + 200) - 100; ctx.globalAlpha = .35 - k * .25; drawCloud(((c[0] - G.t * 5) % (W + 260) + W + 260) % (W + 260) - 130, y, c[2] * .7); ctx.globalAlpha = 1; }
+  // far-away buildings at the very bottom of the climb
+  const by = 600 - (cam.y * -.3) + 300;
+  if (by < H + 300) { ctx.fillStyle = 'rgba(40,40,80,.35)'; for (let x = 0; x < W; x += 60) { const h = 80 + ((x * 37) % 140); ctx.fillRect(x, by - h, 50, h + 400); } }
+}
+function climbDraw(layer) {
+  const C = G.climb, cam = G.cam; if (!C) return;
+  const top = cam.y - 60, bot = cam.y + H + 60;
+  if (layer === 'back') {
+    // brick walls and height marks
+    for (const [x0, x1] of [[-40, 34], [926, 1000]]) {
+      ctx.fillStyle = level.wallCol || '#8a5a3b'; ctx.fillRect(x0, top, x1 - x0, bot - top);
+      ctx.strokeStyle = 'rgba(22,19,44,.35)'; ctx.lineWidth = 2;
+      for (let y = Math.floor(top / 24) * 24; y < bot; y += 24) { ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke(); const off = (y / 24) % 2 ? 12 : 0; for (let x = x0 + off; x < x1; x += 24) { ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y + 24); ctx.stroke(); } }
+      ctx.fillStyle = INK; ctx.fillRect(x0 < 0 ? x1 - 3 : x0, top, 3, bot - top);
+    }
+    ctx.font = Math.round(13 * FDK) + 'px ' + FD; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    for (let y = Math.floor(top / 200) * 200; y < bot; y += 200) { if (y > 520) continue; ctx.fillStyle = '#ffffff'; ctx.fillText(`${climbHeight(y)} m`, 40, y); ctx.fillRect(34, y, 10, 2); }
+    for (const l of C.ladders) {
+      ctx.strokeStyle = INK; ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(l.x - 14, l.y1); ctx.lineTo(l.x - 14, l.y2); ctx.moveTo(l.x + 14, l.y1); ctx.lineTo(l.x + 14, l.y2); ctx.stroke();
+      ctx.strokeStyle = '#c98b4f'; ctx.lineWidth = 3; ctx.stroke();
+      for (let y = l.y2 + 10; y < l.y1; y += 22) { ctx.strokeStyle = INK; ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(l.x - 14, y); ctx.lineTo(l.x + 14, y); ctx.stroke(); ctx.strokeStyle = '#c98b4f'; ctx.lineWidth = 2.5; ctx.stroke(); }
+    }
+    for (const L of C.ledges) {
+      if (L.y1 < top || L.y1 > bot) continue;
+      drawLedge(L);
+    }
+    if (C.summit && C.summit.y1 > top) {
+      const sx = (C.summit.x1 + C.summit.x2) / 2, sy = C.top;
+      ctx.strokeStyle = INK; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(sx, sy - 6); ctx.lineTo(sx, sy - 110); ctx.stroke();
+      ctx.fillStyle = C.summitBy != null ? tc(C.summitBy) : '#ffc928'; tri(sx, sy - 110, sx + 50, sy - 94, sx, sy - 78);
+    }
+  } else if (layer === 'front') {
+    // warning arrows for things about to fall
+    for (const w of C.warn) if (Math.sin(G.t * 24) > -.2) { ctx.fillStyle = '#ff3b3b'; tri(w.x - 14, cam.y + 14, w.x + 14, cam.y + 14, w.x, cam.y + 36); }
+    if (G.climbLava != null && G.climbLava < bot) {
+      const y = G.climbLava, g = ctx.createLinearGradient(0, y, 0, y + 200);
+      g.addColorStop(0, '#ffb02e'); g.addColorStop(.3, '#ff5a1f'); g.addColorStop(1, '#a8160a');
+      ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(-50, bot + 400);
+      for (let x = -50; x <= W + 50; x += 20) ctx.lineTo(x, y + Math.sin(x / 40 + G.t * 3) * 6);
+      ctx.lineTo(W + 50, bot + 400); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = INK; ctx.lineWidth = 3; ctx.stroke();
+    }
+  }
+}
+function drawLedge(L) {
+  const x1 = L.x1, x2 = L.x2, y = L.y1, shake = L.crT && !L.off ? rand(-2, 2) : 0;
+  if (L.off) { ctx.save(); ctx.setLineDash([5, 8]); ctx.strokeStyle = 'rgba(255,255,255,.4)'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(x1, y); ctx.lineTo(x2, y); ctx.stroke(); ctx.restore(); return; }
+  ctx.save(); ctx.translate(shake, 0);
+  const col = { normal: '#c98b4f', ice: '#bfe9ff', sticky: '#ff8fc7', conveyor: '#5a5f6e', move: '#9b6bff', crumble: '#b8a58a', spring: '#5ee08a', cloud: '#ffffff', summit: '#ffc928', ground: level.groundCol || '#5cbf4a' }[L.type] || '#c98b4f';
+  if (L.type === 'cloud') {
+    for (let x = x1 + 10; x < x2; x += 22) { circle(x, y + 2, 15, INK); }
+    for (let x = x1 + 10; x < x2; x += 22) { circle(x, y + 2, 12, '#ffffff'); }
+  } else {
+    const h = L.type === 'ground' ? 60 : 14;
+    ctx.fillStyle = INK; roundRect(x1 - 3, y - 9, x2 - x1 + 6, h + 6, 6); ctx.fill();
+    ctx.fillStyle = col; roundRect(x1, y - 6, x2 - x1, h, 5); ctx.fill();
+    if (L.type === 'normal') { ctx.strokeStyle = 'rgba(22,19,44,.3)'; ctx.lineWidth = 1.5; for (let x = x1 + 30; x < x2; x += 34) { ctx.beginPath(); ctx.moveTo(x, y - 6); ctx.lineTo(x, y + 8); ctx.stroke(); } }
+    if (L.type === 'conveyor') { const o = (G.t * L.vx) % 20; ctx.fillStyle = '#ffc928'; for (let x = x1 + 10; x < x2 - 10; x += 20) { const cx = x + ((o + 20) % 20) - 10; if (cx < x1 + 4 || cx > x2 - 10) continue; L.vx > 0 ? tri(cx, y - 4, cx + 8, y + 1, cx, y + 6) : tri(cx + 8, y - 4, cx, y + 1, cx + 8, y + 6); } }
+    if (L.type === 'crumble') { ctx.strokeStyle = INK; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo((x1 + x2) / 2 - 8, y - 6); ctx.lineTo((x1 + x2) / 2, y + 2); ctx.lineTo((x1 + x2) / 2 - 4, y + 8); ctx.stroke(); }
+    if (L.type === 'spring') { ctx.strokeStyle = INK; ctx.lineWidth = 3; ctx.beginPath(); const m = (x1 + x2) / 2; for (let i = 0; i < 6; i++) ctx.lineTo(m + (i % 2 ? 10 : -10), y + 8 + i * 4); ctx.stroke(); }
+    if (L.type === 'ice') { ctx.fillStyle = 'rgba(255,255,255,.8)'; ctx.fillRect(x1 + 6, y - 4, (x2 - x1) * .3, 3); }
+  }
+  ctx.restore();
+}
+// how high everyone has climbed, up the right-hand side
+function climbHud() {
+  const C = G.climb; if (!C || !G.mini) return;
+  const x = W - 18, y0 = H - 40, y1 = 70;
+  ctx.fillStyle = INK; roundRect(x - 6, y1 - 4, 12, y0 - y1 + 8, 6); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,.85)'; roundRect(x - 3, y1, 6, y0 - y1, 3); ctx.fill();
+  const span = C.summit ? 520 - C.top : Math.max(1200, 520 - G.cam.y + 400);
+  for (const t of G.teams) {
+    const r = TEAMS[t].active.find(o => !o.lost); if (!r) continue;
+    const k = clamp((520 - r.p.pelvis.y) / span, 0, 1);
+    circle(x, y0 - (y0 - y1) * k, 8, INK); circle(x, y0 - (y0 - y1) * k, 6, tc(t));
+  }
+  if (C.summit) { ctx.fillStyle = '#ffc928'; tri(x - 2, y1 - 22, x + 14, y1 - 16, x - 2, y1 - 10); ctx.fillStyle = INK; ctx.fillRect(x - 3, y1 - 24, 2, 22); }
+}
+ENG.climb = {
+  speedK: 1.6, build: climbBuild, pre: climbPre, post: climbPost, spawn: climbSpawn, jump: climbJump, press: climbPress, ai: climbAI,
+  backdrop: climbBackdrop, drawWorld: climbDraw, drawHud: climbHud,
+};
+
 // ================= party game flow =================
 const isMini = () => G.game !== 'battle' && !!G.mini;
 let best = {};
@@ -3165,6 +3427,7 @@ function startRound(def) {
   fx.pops = []; fx.puffs = []; fx.confetti = []; fx.says = []; fx.bolts = [];
   G.teams = teamsFor(def);
   for (const tm of TEAMS) { Object.assign(tm, mkTeam(tm.t)); tm.dropped = true; tm.aimX = -999; }
+  G.phase = 'intro';
   for (const t of G.teams) spawnPlayer(t);
   if (def.setup) def.setup();
   for (const [k, o] of def.hazards || []) addHazard(k, Object.assign({}, o));
