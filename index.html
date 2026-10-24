@@ -872,7 +872,8 @@ function collide() {
 const NO_PERCH = new Set(['hL', 'hR', 'eL', 'eR', 'head', 'neck']);
 function capsule(p, c, deadly) {
   // one-way ledges only catch things coming down onto them (and let you drop through on purpose)
-  if (c.oneway && (p.py + p.r > Math.min(c.y1, c.y2) - c.r + 3 || (p.body.dropT || 0) > G.t)) return;
+  // one-way: only catches things coming down onto it from above, never a car or item flying up through it (lifts still carry riders)
+  if (c.oneway && (p.py + p.r > Math.min(c.y1, c.y2) - c.r + 3 || (p.body.type !== 'rag' && p.y < p.py - 400 * SDT) || (p.body.dropT || 0) > G.t)) return;
   // only feet, knees and bottoms land on one-way ledges: a flailing hand mustn't hook one and haul the body up
   if (c.oneway && p.body.type === 'rag' && NO_PERCH.has(p.tag)) return;
   const ex = c.x2 - c.x1, ey = c.y2 - c.y1, L2 = ex * ex + ey * ey || 1;
@@ -15523,6 +15524,1264 @@ MINIS.push({
     return za_cpuDir(c, .85);
   },
 });
+// ================= racing levels ranks 11-20 (prefix zb_) =================
+// Shared helpers for this batch.
+// a gyro that pulls a car back towards level (kp) and stops it spinning (kd); used where flips would be unfair
+function zb_gyro(c, dt, kp, kd = 0, lim = 1.4) {
+  const dx = c.bB.x - c.bA.x, dy = c.bB.y - c.bA.y, L2 = dx * dx + dy * dy || 1, va = vel(c.bA), vb = vel(c.bB);
+  const w = ((vb.y - va.y) * dx - (vb.x - va.x) * dy) / L2;
+  const k = (clamp(carAng(c), -lim, lim) * kp + w * kd) * dt;
+  addVel(c.bB, 0, -k); addVel(c.bA, 0, k); addVel(c.wB, 0, -k * .5); addVel(c.wA, 0, k * .5);
+}
+// how fast a car is spinning (radians per second, + is a frontflip)
+function zb_spin(c) {
+  const dx = c.bB.x - c.bA.x, dy = c.bB.y - c.bA.y, L2 = dx * dx + dy * dy || 1, va = vel(c.bA), vb = vel(c.bB);
+  return ((vb.y - va.y) * dx - (vb.x - va.x) * dy) / L2;
+}
+// turn a car towards an angle (same idea as zb_gyro, any target)
+const zb_wrap = a => Math.atan2(Math.sin(a), Math.cos(a));
+function zb_turnTo(c, target, dt, kp, kd = 0) {
+  const dx = c.bB.x - c.bA.x, dy = c.bB.y - c.bA.y, L2 = dx * dx + dy * dy || 1, va = vel(c.bA), vb = vel(c.bB);
+  const w = ((vb.y - va.y) * dx - (vb.x - va.x) * dy) / L2;
+  const k = (clamp(zb_wrap(carAng(c) - target), -1.4, 1.4) * kp + w * kd) * dt;
+  addVel(c.bB, 0, -k); addVel(c.bA, 0, k); addVel(c.wB, 0, -k * .5); addVel(c.wA, 0, k * .5);
+}
+// undo the engine's own in-air tilt push, for levels that run their own air control
+// (matches the engine's in-air levelling line; if that line ever changes, this simply does nothing)
+const zb_newTip = /1100 \* clamp\(a, -1\.2, 1\.2\) \+ \(vel\(c\.bB\)\.y - vel\(c\.bA\)\.y\) \* 3/.test(String(racePre));
+function zb_noAirTilt(c, dt) {
+  if (carGround(c)) return;
+  const a = clamp(carAng(c), -1.2, 1.2);
+  const k = (zb_newTip ? 1100 * a + (vel(c.bB).y - vel(c.bA).y) * 3 : 0) * dt;
+  addVel(c.bB, 0, k); addVel(c.bA, 0, -k); addVel(c.wB, 0, k * .5); addVel(c.wA, 0, -k * .5);
+}
+const zb_car = t => cars.find(c => c.team === t && !c.dead);
+// drive a car ourselves (for levels that set c.done so the engine keeps its hands off the wheel)
+function zb_drive(c, dir, dt, o = {}) {
+  const a = carAng(c), fx = Math.cos(a), fy = Math.sin(a), v = carVel(c), vf = v.x * fx + v.y * fy;
+  if (carGround(c)) {
+    const top = o.top || c.V.top, acc = o.acc || c.V.acc * 1.25;
+    if (dir && (Math.sign(vf) !== Math.sign(dir) || Math.abs(vf) < top * (dir < 0 ? (o.rev ?? .6) : 1)))
+      for (const p of [c.wA, c.wB]) addVel(p, dir * acc * fx * dt, dir * acc * fy * dt);
+    // the engine brakes cars nobody is driving; give some of that speed back so they roll freely
+    if (o.roll) for (const p of c.list) addVel(p, v.x * o.roll, v.y * o.roll);
+  } else if (dir && o.air !== false) {
+    const k = 1400 * dir * dt;
+    addVel(c.bB, 0, -k); addVel(c.bA, 0, k); addVel(c.wB, 0, -k * .5); addVel(c.wA, 0, k * .5);
+  }
+}
+function zb_shove(c, vx, vy, set) {
+  for (const p of c.list.concat(c.driver ? c.driver.list : [])) set ? setVel(p, vx, vy) : addVel(p, vx, vy);
+}
+// move a car (and driver) so its wheels' middle sits at x, y
+function zb_place(c, x, y) {
+  const dx = x - carX(c), dy = y - carY(c);
+  for (const p of c.list.concat(c.driver ? c.driver.list : [])) { p.x += dx; p.y += dy; p.px = p.x; p.py = p.y; }
+}
+// a brand new car for team t at x (and optionally wheel height y)
+function zb_respawn(t, x, y) {
+  const old = cars.find(c => c.team === t);
+  if (old) { if (old.driver) removeRag(old.driver); old.checkX = x; }
+  const r = raceSpawn(t), c = r.seat;
+  if (!old) { const gy = groundY(x); zb_place(c, x, gy != null ? gy - c.V.wr - 6 : carY(c)); }
+  if (y != null) zb_place(c, x, y);
+  return c;
+}
+// our own camera: frame some world points. Called from tick, and from draw('back') between rounds.
+function zb_cam(pts, o = {}) {
+  if (!pts.length || !G.cam) return;
+  let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+  for (const [x, y] of pts) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+  const pad = o.pad ?? 240;
+  const w = Math.max(x1 - x0 + pad * 2, o.w || 0), h = Math.max(y1 - y0 + pad * 1.5, o.h || 0);
+  const z = clamp(Math.min(W / w, H / h), o.zmin ?? .5, o.zmax ?? 1);
+  const cx = o.cx ?? (x0 + x1) / 2 + (o.ahead || 0), cy = o.cy ?? (y0 + y1) / 2;
+  const S = G.zb_cs || (G.zb_cs = { z, x: cx - W / 2 / z, y: cy - H * (o.yk ?? .55) / z });
+  const k = Math.min(1, (o.dt || DT) * (o.k ?? 4));
+  S.z += (z - S.z) * k;
+  S.x += (cx - W / 2 / S.z - S.x) * k; S.y += (cy - H * (o.yk ?? .55) / S.z - S.y) * k;
+  G.cam.x = S.x; G.cam.y = S.y; G.cam.z = S.z;
+}
+// one-way ledges give a part a kick upward as it leaves the top of the ledge, which flips cars
+// flying up through them; a rising car (and its driver) skips one-way ledges altogether
+function zb_rising(c) {
+  if (carVel(c).y < -40) { c.dropT = G.t + .05; if (c.driver) c.driver.dropT = G.t + .05; }
+}
+const zb_carPts = () => cars.filter(c => !c.dead && c.team < 2).map(c => [carX(c), carY(c)]);
+// segments we add ourselves: a polyline cut into short pieces (one-way ledges only work when nearly flat)
+function zb_road(pts, o = {}) {
+  const segs = [], step = o.step || 40;
+  for (let i = 1; i < pts.length; i++) {
+    const [ax, ay] = pts[i - 1], [bx, by] = pts[i], n = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay) / step));
+    for (let j = 0; j < n; j++) {
+      const s = { x1: ax + (bx - ax) * j / n, y1: ay + (by - ay) * j / n, x2: ax + (bx - ax) * (j + 1) / n, y2: ay + (by - ay) * (j + 1) / n, r: o.r || 10, ground: !!o.ground, oneway: !!o.oneway };
+      addSeg(s); segs.push(s);
+    }
+  }
+  return segs;
+}
+// draw in screen space from inside draw(layer)
+function zb_screen(fn) { ctx.save(); ctx.translate(G.cam.x, G.cam.y); ctx.scale(1 / G.cam.z, 1 / G.cam.z); fn(); ctx.restore(); }
+function zb_text(t, x, y, size, col, al = 'center') {
+  ctx.font = Math.round(size * FDK) + 'px ' + FD; ctx.textAlign = al; ctx.textBaseline = 'middle';
+  ctx.lineJoin = 'round'; ctx.lineWidth = Math.max(4, size / 4); ctx.strokeStyle = INK; ctx.strokeText(skinWord(t), x, y);
+  ctx.fillStyle = col; ctx.fillText(skinWord(t), x, y);
+}
+function zb_arrow(x, y, dir, s, col) {
+  ctx.fillStyle = INK; ctx.beginPath(); ctx.moveTo(x - dir * s * 1.1, y - s * .8); ctx.lineTo(x + dir * s * 1.1, y); ctx.lineTo(x - dir * s * 1.1, y + s * .8); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = col; ctx.beginPath(); ctx.moveTo(x - dir * s * .8, y - s * .5); ctx.lineTo(x + dir * s * .7, y); ctx.lineTo(x - dir * s * .8, y + s * .5); ctx.closePath(); ctx.fill();
+}
+
+// ---------- 11. The Floor Is Lava (For Real) ----------
+// Switchback ledges inside a volcano, linked by jump pads at alternate ends, with lava rising underneath.
+const zb_LV = { x0: -250, x1: 1150, y0: 430, gap: 175, n: 10, tilt: 30, pad: 130 };
+const zb_lvDir = i => i % 2 ? -1 : 1;
+// the centre line of ledge i at x (ledges rise a little in the direction you drive them)
+function zb_lvY(i, x) {
+  const L = zb_LV, f = (x - L.x0) / (L.x1 - L.x0);
+  if (i === 0) return L.y0;
+  return L.y0 - i * L.gap - L.tilt * (zb_lvDir(i) > 0 ? f : 1 - f);
+}
+function zb_lvTier(c) {
+  const L = zb_LV, yb = carY(c) + c.V.wr + 10;
+  return clamp(Math.round((L.y0 - yb) / L.gap), 0, L.n - 1);
+}
+MINIS.push({
+  id: 'zb_lava', engine: 'race', rank: 11, name: 'The Floor Is Lava (For Real)', icon: 'volcano', rules: 'survive', noPunch: true, noCatch: true,
+  soloTime: 45, maxTime: 100, heatTime: 40,
+  howto: 'Hold the gas to zig-zag up the volcano. Jump pads at the ends fling you up a ledge. Stay above the lava!',
+  blurb: 'Lava rises inside a volcano. Drive up the switchbacks to stay ahead of it.',
+  deco: 'volcano', sky: ['#2b0a1a', '#a8321a'], ground: ['#5a3434', '#2a1414'], edge: '#ff9a4a',
+  track: [['flat', 1500]], startX: 120, startY: 430, crateEvery: 0, vehicles: ['pumpkin', 'bathtub', 'couch', 'toilet', 'shoe', 'mower', 'duck', 'hotdog'],
+  setup() {
+    const L = zb_LV;
+    G.track.finish = 1e9;
+    zb_road([[L.x0, L.y0 + 10], [L.x0, L.y0 - L.n * L.gap - 900]], { r: 14 });
+    zb_road([[L.x1, L.y0 + 10], [L.x1, L.y0 - L.n * L.gap - 900]], { r: 14 });
+    for (let i = 1; i < L.n; i++) zb_road([[L.x0, zb_lvY(i, L.x0)], [L.x1, zb_lvY(i, L.x1)]], { oneway: true });
+    G.zb_lv = { lava: 600, padT: [], rockT: 6, bub: [], top: [] };
+    G.zb_cs = null;
+    for (const c of cars) c.done = true;
+  },
+  tick(dt) {
+    const L = zb_LV, S = G.zb_lv;
+    // the lava speeds up as the round heats up
+    // it also creeps faster when it is far below the slowest driver, so nobody gets bored
+    const low = Math.max(...cars.filter(c => c.driver && c.driver.seat).map(c => carY(c)), -1e9);
+    S.lava -= (12 + 26 * Math.min(G.heat, 1.8) + Math.max(0, S.lava - low - 480) * .25) * dt;
+    for (const c of cars.slice()) {
+      if (c.dead) continue;
+      c.done = true;
+      const r = c.driver, i = zb_lvTier(c), d = zb_lvDir(i);
+      zb_rising(c);
+      // magic gyro suspension: flips here would be the end, so cars stay (mostly) upright
+      zb_gyro(c, dt, carGround(c) ? 1500 : 2600, 60);
+      if (r && r.seat) {
+        // either arrow drives the way this ledge goes
+        let dir = isCpu(c.team) ? c.cpuK : (teamDir(c.team) !== 0 ? 1 : 0), dd = d;
+        const px = d > 0 ? L.x1 - L.pad : L.x0 + L.pad, toPad = (px - carX(c)) * d, wait = (S.padT[i] || 0) > G.t;
+        // on the top ledge, park in the middle (first one up gets the higher spot)
+        if (i === L.n - 1) {
+          if (!S.top.includes(c.team)) S.top.push(c.team);
+          const mx = (L.x0 + L.x1) / 2 + (S.top.indexOf(c.team) ? 90 : -90);
+          dd = Math.abs(carX(c) - mx) > 50 ? Math.sign(mx - carX(c)) : 0;
+        } else if (wait && toPad > -20 && toPad < 260) {
+          // the pad is recharging: wait your turn
+          dir = 0; if (carGround(c)) for (const p of c.list) { const v = vel(p); addVel(p, -v.x * Math.min(1, 9 * dt), 0); }
+        }
+        if (carGround(c)) zb_drive(c, dir * dd, dt, { rev: .75, top: i === L.n - 1 ? 260 : 0 });
+        // jump pads at the far end of each ledge; each needs a moment to recharge, so two cars don't get fired into each other
+        if (i < L.n - 1 && toPad < 0 && carGround(c) && (c.zb_padT || 0) < G.t && !wait) {
+          c.zb_padT = G.t + 1; S.padT[i] = G.t + 1.3;
+          zb_shove(c, d * 50, -790, true);
+          pop(pick(['BOING!', 'UP YOU GO!', 'SPROING!', 'WHEEE!']), carX(c), carY(c) - 70, '#ffd23f', 24); sfx.boing(1);
+        }
+        // wedged half through a ledge? pop out
+        c.zb_stuck = !carGround(c) && Math.hypot(carVel(c).x, carVel(c).y) < 40 ? (c.zb_stuck || 0) + dt : 0;
+        if (c.zb_stuck > .4) { c.zb_stuck = 0; zb_shove(c, 0, -520); c.dropT = r.dropT = G.t + .3; pop('POP!', carX(c), carY(c) - 60, '#ffffff', 18); }
+        if (i === L.n - 1 && !c.zb_top) { c.zb_top = true; pop('TOP OF THE VOLCANO!', carX(c), carY(c) - 90, tc(c.team), 24); sfx.cheer(); }
+      }
+      // touching the lava toasts you
+      if (carY(c) + c.V.wr * .5 > S.lava) {
+        if (r && r.seat) { ejectDriver(c, pick(['TOASTED!', 'SIZZLE!', 'MARSHMALLOWED!', 'HOT HOT HOT!'])); sfx.zap(); puffs(carX(c), S.lava, 14, '#ff8a00'); }
+        if (carY(c) > S.lava + 120 && !c.driver) removeCar(c);
+      }
+    }
+    for (const r of rags) if (!r.lost && !r.seat && r.p.pelvis.y > S.lava) loseBody(r, 'lava');
+    // the volcano spits lava rocks now and then
+    if ((S.rockT -= dt) <= 0) {
+      S.rockT = rand(2.5, 4.5) / (1 + G.heat * .6);
+      // they come down from above, so you can see them coming
+      const it = spawnItem('zb_rock', rand(L.x0 + 80, L.x1 - 80), G.cam.y - 50, rand(-40, 40), 120, -1);
+      it.life = 1e9; it.zb_life = 6;
+      sfx.boop();
+    }
+    if (Math.random() < dt * 6) S.bub.push({ x: rand(L.x0, L.x1), t: 0, r: rand(5, 12) });
+    for (const b of S.bub) b.t += dt;
+    S.bub = S.bub.filter(b => b.t < .8);
+    this.cam();
+  },
+  cam() {
+    const S = G.zb_lv, L = zb_LV, pts = zb_carPts();
+    const al = cars.filter(c => c.driver && c.driver.seat).map(c => [carX(c), carY(c)]);
+    const use = al.length ? al : pts;
+    if (!use.length) return;
+    const top = Math.min(...use.map(p => p[1]));
+    use.push([L.x0, Math.min(S.lava, top + 520)]);
+    zb_cam(use, { cx: (L.x0 + L.x1) / 2, w: L.x1 - L.x0 + 140, zmin: .42, zmax: .68, pad: 160, yk: .5 });
+  },
+  draw(layer) {
+    const L = zb_LV, S = G.zb_lv; if (!S) return;
+    const cam = G.cam, top = cam.y - 40, bot = cam.y + H / cam.z + 40;
+    if (layer === 'back') {
+      if (G.phase !== 'live') this.cam();
+      // rock walls of the crater
+      for (const [a, b] of [[L.x0 - 1400, L.x0 + 4], [L.x1 - 4, L.x1 + 1400]]) {
+        ctx.fillStyle = '#3a1c1c'; ctx.fillRect(a, top, b - a, bot - top);
+        ctx.strokeStyle = INK; ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(a < L.x0 ? b : a, top); ctx.lineTo(a < L.x0 ? b : a, bot); ctx.stroke();
+        ctx.fillStyle = 'rgba(255,120,40,.18)';
+        for (let y = Math.floor(top / 90) * 90; y < bot; y += 90) { const x = a < L.x0 ? b - 30 - ((y / 90) % 3) * 20 : a + 20 + ((y / 90) % 3) * 22; ctx.beginPath(); ctx.ellipse(x, y, 14, 30, 0, 0, 7); ctx.fill(); }
+      }
+      // the ledges
+      for (let i = 1; i < L.n; i++) {
+        const ya = zb_lvY(i, L.x0), yb = zb_lvY(i, L.x1);
+        ctx.fillStyle = '#6a3c34'; ctx.strokeStyle = INK; ctx.lineWidth = 5; ctx.lineJoin = 'round';
+        ctx.beginPath(); ctx.moveTo(L.x0, ya - 10); ctx.lineTo(L.x1, yb - 10); ctx.lineTo(L.x1, yb + 22); ctx.lineTo(L.x0, ya + 22); ctx.closePath(); ctx.fill(); ctx.stroke();
+        ctx.strokeStyle = '#ff9a4a'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(L.x0 + 4, ya - 8); ctx.lineTo(L.x1 - 4, yb - 8); ctx.stroke();
+      }
+      for (let i = 0; i < L.n; i++) {
+        const d = zb_lvDir(i);
+        // which way to go
+        for (let k = 0; k < 3; k++) { const x = L.x0 + 300 + k * 400; zb_arrow(x, zb_lvY(i, x) - 46, d, 13, 'rgba(255,255,255,.75)'); }
+        if (i === L.n - 1) { const x = (L.x0 + L.x1) / 2, y = zb_lvY(i, x) - 10; zb_text('SAFE-ISH!', x, y - 80, 24, '#ffd23f'); continue; }
+        // the jump pad
+        const x1 = d > 0 ? L.x1 - L.pad + 10 : L.x0 + 14, x2 = d > 0 ? L.x1 - 14 : L.x0 + L.pad - 10, y = zb_lvY(i, (x1 + x2) / 2) - 10;
+        ctx.fillStyle = INK; roundRect(x1 - 3, y - 13, x2 - x1 + 6, 16, 6); ctx.fill();
+        ctx.fillStyle = (S.padT[i] || 0) > G.t ? '#8f8ca8' : Math.sin(G.t * 8 + i) > 0 ? '#ffd23f' : '#ff9f1a'; roundRect(x1, y - 10, x2 - x1, 10, 4); ctx.fill();
+        for (let k = 0; k < 2; k++) zb_arrowUp((x1 + x2) / 2, y - 34 - k * 22 - (G.t * 30 % 22), 11, '#ffd23f');
+      }
+    } else if (layer === 'front') {
+      // the lava
+      const y = S.lava;
+      if (y > bot) return;
+      const g = ctx.createLinearGradient(0, y, 0, y + 260); g.addColorStop(0, '#ffb02e'); g.addColorStop(.3, '#ff5a1f'); g.addColorStop(1, '#a8160a');
+      ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(L.x0 - 1400, bot + 400);
+      for (let x = L.x0 - 1400; x <= L.x1 + 1400; x += 40) ctx.lineTo(x, y + Math.sin(x / 70 + G.t * 3) * 7 + Math.sin(x / 31 - G.t * 5) * 3);
+      ctx.lineTo(L.x1 + 1400, bot + 400); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = INK; ctx.lineWidth = 5; ctx.stroke();
+      ctx.fillStyle = 'rgba(255,240,150,.8)';
+      for (const b of S.bub) { ctx.globalAlpha = 1 - b.t / .8; ctx.beginPath(); ctx.arc(b.x, y - b.t * 20, b.r * (1 + b.t), 0, 7); ctx.fill(); }
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = 'rgba(255,120,30,.15)'; ctx.fillRect(L.x0 - 1400, y - 120, L.x1 - L.x0 + 2800, 120);
+      zb_screen(() => zb_text(`LAVA ${Math.max(0, Math.round((zb_LV.y0 - S.lava) / 10 + 13))} m`, 24, H - 26, 18, '#ffb02e', 'left'));
+    }
+  },
+});
+function zb_arrowUp(x, y, s, col) {
+  ctx.fillStyle = INK; tri(x - s - 3, y + s * .6 + 2, x, y - s - 3, x + s + 3, y + s * .6 + 2);
+  ctx.fillStyle = col; tri(x - s, y + s * .6, x, y - s, x + s, y + s * .6);
+}
+Object.assign(ITEMS, {
+  // a blob of lava rock spat out of the volcano; it bonks cars it lands on
+  zb_rock: { label: 'Lava Rock', r: 13, m: .6, life: 1e9, sprite: 'zb_rock',
+    update(it, dt) {
+      it.zb_life -= dt; it.ang += dt * 6;
+      if (Math.random() < .5) fx.puffs.push({ x: it.p.x, y: it.p.y - 10, vx: rand(-20, 20), vy: -40, r: rand(3, 6), t: 0, life: .4, color: pick(['#ffb02e', '#ff5a1f', '#5c5c5c']) });
+      if (it.age > .3) for (const c of cars) if (!c.dead && c.driver && (it.cd || 0) <= 0 && Math.hypot(carX(c) - it.p.x, carY(c) - 20 - it.p.y) < 50) {
+        it.cd = 1; zb_shove(c, 0, -120); for (const p of [c.wA, c.wB]) { const v = vel(p); addVel(p, -v.x * .4, 0); } pop('BONK!', it.p.x, it.p.y - 20, '#ffb02e', 20); sfx.clang(); shake(4);
+      }
+      if (it.zb_life <= 0 || (G.zb_lv && it.p.y > G.zb_lv.lava + 40)) { removeItem(it, it.zb_life <= 0); }
+      return false;
+    } },
+});
+Object.assign(SPRITES, {
+  zb_pizza: [[
+    'kkkkkkkkkkkkkk',
+    'kwwwwwwwwwwwwk',
+    'kwwwrrrrrrwwwk',
+    'kwwrryyyyrrwwk',
+    'kwwwrrrrrrwwwk',
+    'kwwwwwwwwwwwwk',
+    'kkkkkkkkkkkkkk',
+  ]],
+  zb_cookie: [[
+    '...bbbbbb...',
+    '..bbbBbbbb..',
+    '.bbBbbbbBbb.',
+    'bbbbbbbbbbbb',
+    'bBbbbBbbbbBb',
+    'bbbbbbbbBbbb',
+    'bbBbbbbbbbbb',
+    '.bbbbBbbbBb.',
+    '..bbbbbbbb..',
+    '...bbbbbb...',
+  ]],
+  zb_hotdog: [[
+    '...bbbbbbbbbb...',
+    '.bbnnnnnnnnnnbb.',
+    'bRRRRRRRRRRRRRRb',
+    'RrrryrrryrrryrrR',
+    'RrryrrryrrryrrrR',
+    'bRRRRRRRRRRRRRRb',
+    '.bbnnnnnnnnnnbb.',
+    '...bbbbbbbbbb...',
+  ]],
+  zb_pinata: [[
+    '.......mm.......',
+    '......mmmm......',
+    '..yy..mkmm......',
+    '.yyyy.mmmm......',
+    '..yy..mmmm......',
+    '......mmmm......',
+    '....ccccccccc...',
+    '...mmmmmmmmmmm..',
+    '..yyyyyyyyyyyyy.',
+    '..ccccccccccccc.',
+    '..mmmmmmmmmmmmm.',
+    '...yy.yy...yy.yy',
+    '...yy.yy...yy.yy',
+  ]],
+  zb_hay: [[
+    'YyyyyyyyyyyyyY',
+    'yyYyyyByyyYyyy',
+    'yyyyYyByyyyyYy',
+    'yYyyyyByyYyyyy',
+    'yyyyyyByyyyyyy',
+    'yyYyyyByyYyyYy',
+    'YyyyyyyyyyyyyY',
+  ]],
+  zb_rock: [[
+    '....RRRR....',
+    '..RRrrrRRR..',
+    '.RrroorrrRR.',
+    '.RroyyorrrR.',
+    'RRroyyorRrRR',
+    'RrrooorrrrrR',
+    'RrRrrrrrRrrR',
+    'RRrrrRrrrrRR',
+    '.RRrrrrrrRR.',
+    '..RRRRRRRR..',
+  ]],
+});
+
+// ---------- 12. Flippity Flop Halfpipe ----------
+// A giant halfpipe that pumps you up and down; lean in the air to flip, land on your wheels to bank it.
+// Two cars in one halfpipe crash into each other all the time, so Blue really rides an identical pipe far below
+// and is drawn shifted up into Red's pipe: both share the screen but never touch.
+const zb_HP = { cx: 450, y: 430, half: 430, R: 330, lip: 70, deck: 170, DY: 4000 };
+zb_HP.cy = zb_HP.y - zb_HP.R; zb_HP.lipY = zb_HP.cy - zb_HP.lip; zb_HP.lipX = zb_HP.half + zb_HP.R;
+function zb_hpPoints(dy = 0) {
+  const P = zb_HP, xl = P.cx - P.half, xr = P.cx + P.half, pts = [];
+  pts.push([P.cx - P.lipX - P.deck, P.lipY - 40], [P.cx - P.lipX, P.lipY]);
+  for (let i = 0; i <= 14; i++) { const th = Math.PI / 2 * (1 - i / 14); pts.push([xl - P.R * Math.sin(th), P.cy + P.R * Math.cos(th)]); }
+  for (let i = 0; i <= 14; i++) { const th = Math.PI / 2 * i / 14; pts.push([xr + P.R * Math.sin(th), P.cy + P.R * Math.cos(th)]); }
+  pts.push([P.cx + P.lipX, P.lipY], [P.cx + P.lipX + P.deck, P.lipY - 40]);
+  return pts.map(([x, y]) => [x, y + dy]);
+}
+// line a car up with an angle without any spin: the wheels "stick" to the right angle
+function zb_align(c, target, rate, dt) {
+  const v = carVel(c);
+  for (const p of c.list) setVel(p, v.x, v.y);
+  const d = clamp(zb_wrap(target - carAng(c)), -rate * dt, rate * dt), cx = carX(c), cy = carY(c), cs = Math.cos(d), sn = Math.sin(d);
+  for (const p of c.list) {
+    const vx = p.x - p.px, vy = p.y - p.py, dx = p.x - cx, dy = p.y - cy;
+    p.x = cx + dx * cs - dy * sn; p.y = cy + dx * sn + dy * cs; p.px = p.x - vx; p.py = p.y - vy;
+  }
+}
+// shift one team's bodies up or down (only while drawing)
+function zb_shiftTeam(t, dy) {
+  for (const c of cars) if (c.team === t) for (const p of c.list) { p.y += dy; p.py += dy; }
+  for (const r of rags) if (r.team === t) for (const p of r.list) { p.y += dy; p.py += dy; }
+}
+MINIS.push({
+  id: 'zb_halfpipe', engine: 'race', rank: 12, name: 'Flippity Flop Halfpipe', icon: 'xr_car', rules: 'score', time: 60, soloTime: 60, soloGoal: 18, noCatch: true,
+  howto: 'The pipe swings you up and down. Hold ← or → to pump higher and flip in the air, then land on your wheels to bank it!',
+  blurb: 'A giant skate halfpipe and 60 seconds to rack up flips and air time.',
+  deco: 'night', sky: ['#1a0f3d', '#5a2a8a'], ground: ['#e0a860', '#a8743a'], edge: '#ffe2a8',
+  track: [['flat', 860]], startX: 510, startY: 430, crateEvery: 0,
+  setup() {
+    const P = zb_HP;
+    statics.grid = new Map(); statics.segs = [];
+    for (const dy of [0, P.DY]) {
+      const pts = zb_hpPoints(dy), L = pts[0][0], R = pts[pts.length - 1][0];
+      zb_road(pts, { ground: true, step: 50 });
+      zb_road([[L, P.lipY - 40 + dy], [L, P.lipY - 2000 + dy]], { r: 14 }); zb_road([[R, P.lipY - 40 + dy], [R, P.lipY - 2000 + dy]], { r: 14 });
+    }
+    G.track.lines = [zb_hpPoints()]; G.track.finish = 1e9; G.track.minY = P.lipY - 40; G.track.maxY = P.y;
+    G.killY = P.DY + 1400;
+    G.zb_hp = { st: [{}, {}], cars: [null, null] };
+    G.zb_cs = null;
+    this.place();
+  },
+  // new cars (the start, or after a crash) go to their own pipe
+  place() {
+    const P = zb_HP, S = G.zb_hp;
+    for (const c of cars) {
+      if (c.dead || c.team > 1 || S.cars[c.team] === c) continue;
+      S.cars[c.team] = c; S.st[c.team] = { air: false, prev: carAng(c), rot: 0 };
+      zb_place(c, P.cx + (c.team ? -70 : 70), P.y - c.V.wr - 12 + (c.team ? P.DY : 0));
+    }
+  },
+  tick(dt) {
+    const P = zb_HP, S = G.zb_hp;
+    this.place();
+    for (const c of cars.slice()) {
+      if (c.dead || c.team > 1) continue;
+      const t = c.team, r = c.driver, F = S.st[t], dy = t ? P.DY : 0, cy = carY(c) - dy;
+      c.done = true; c.checkX = P.cx;
+      zb_noAirTilt(c, dt);
+      const a = carAng(c), v = carVel(c), g = carGround(c);
+      const da = zb_wrap(a - F.prev); F.prev = a;
+      if (!r || !r.seat) { F.air = false; continue; }
+      let dir = isCpu(t) ? 0 : Math.abs(teamDir(t)) > .3 ? 1 : 0;
+      if (g) {
+        // the pipe pumps you; holding an arrow pumps harder and sends you higher
+        const fx = Math.cos(a), fy = Math.sin(a), vf = v.x * fx + v.y * fy, s = Math.sign(vf) || (carX(c) < P.cx ? 1 : -1);
+        if (isCpu(t)) dir = Math.random() < .7 ? 1 : 0;
+        const sp = Math.abs(vf), want = dir ? 1300 : 1120;
+        const k = sp > want ? 0 : dir ? 1500 : 700;
+        for (const p of [c.wA, c.wB]) addVel(p, s * k * fx * dt, s * k * fy * dt);
+      }
+      // flights: from leaving the lip to coming back below it
+      if (!F.air && cy < P.lipY - 6 && v.y < 0) {
+        F.air = true; F.rot = 0; F.maxH = 0; F.side = carX(c) > P.cx ? 1 : -1;
+        F.plan = isCpu(t) ? (Math.random() < .7 ? (Math.random() < .5 ? -1 : 1) : 0) : 0;
+      }
+      if (F.air) {
+        F.rot += da; F.maxH = Math.max(F.maxH, P.lipY - cy);
+        const want = F.side > 0 ? -Math.PI / 2 : Math.PI / 2;
+        if (cy > P.lipY - 150 && v.y > 0) zb_align(c, want, 7, dt);   // coming back in: the wheels find the wall
+        else if (isCpu(t)) {
+          // the computer flips when it has the height for it, then lines its wheels up with the wall
+          if (F.plan && Math.abs(F.rot) < Math.PI * 2 - 1 && F.maxH > 50) zb_drive(c, F.plan, dt);
+          else zb_turnTo(c, want, dt, 1800, 80);
+        } else if (teamDir(t) && Math.abs(zb_spin(c)) < 8) zb_drive(c, teamDir(t), dt);
+        else zb_gyro(c, dt, 0, 40);
+        if (cy > P.lipY + 24) {
+          F.air = false; F.landT = G.t + .6;
+          const n = Math.floor((Math.abs(F.rot) + 1.3) / (Math.PI * 2)), ok = Math.abs(zb_wrap(a - want)) < 1.15;
+          const pts = n * 3 + (n > 1 ? 2 : 0) + (F.maxH > 220 ? 1 : 0);
+          if (ok && pts) F.bank = { pts, n, back: F.rot < 0, at: G.t + .4 };
+          else if (!ok && (n || F.maxH > 60)) pop(pick(['OOOOH!', 'UH OH!', 'WOBBLE!']), carX(c), cy - 80, '#ffffff', 22);
+        }
+      }
+      // just back in the pipe: keep the wheels on the wall until the ramp takes over
+      if (!F.air && F.landT > G.t && !g && carY(c) - dy < P.cy) zb_align(c, F.side > 0 ? -Math.PI / 2 : Math.PI / 2, 7, dt);
+      if (F.bank && G.t > F.bank.at) {
+        const B = F.bank; F.bank = null;
+        const word = B.n >= 3 ? 'TRIPLE FLIP!' : B.n === 2 ? 'DOUBLE FLIP!' : B.n === 1 ? (B.back ? 'BACKFLIP!' : 'FRONTFLIP!') : 'BIG AIR!';
+        pop(word, carX(c), cy - 110, '#ffd23f', B.n ? 30 : 22);
+        miniPoint(t, B.pts, carX(c), cy - 150);
+        if (B.n) { sfx.cheer(); for (let i = 0; i < 14; i++) fx.confetti.push({ x: rand(0, W), y: rand(-80, -10), vx: rand(-40, 40), vy: rand(60, 200), a: rand(0, 6), va: rand(-6, 6), c: pick(['#ffd23f', tc(t), '#ffffff']) }); }
+      }
+    }
+    // a crash loses whatever was waiting to be banked
+    for (const t of [0, 1]) { const c = S.cars[t]; if (c && (!c.driver || !c.driver.seat) && S.st[t].bank) { S.st[t].bank = null; pop('NOOO!', carX(c), carY(c) - (t ? P.DY : 0) - 90, '#ffffff', 24); } }
+    this.cam();
+  },
+  cam() {
+    const P = zb_HP, pts = cars.filter(c => !c.dead && c.team < 2).map(c => [carX(c), carY(c) - (c.team ? P.DY : 0)]);
+    zb_cam(pts.concat([[P.cx - P.lipX - 60, P.y + 40], [P.cx + P.lipX + 60, P.lipY - 160]]), { pad: 20, zmin: .4, zmax: .6, cx: P.cx, yk: .5 });
+  },
+  draw(layer) {
+    const P = zb_HP; if (!G.zb_hp) return;
+    if (layer === 'back') {
+      if (G.phase !== 'live') { this.place(); this.cam(); }
+      // stadium lights
+      for (const x of [P.cx - 700, P.cx + 700]) {
+        ctx.fillStyle = INK; ctx.fillRect(x - 6, P.lipY - 520, 12, 560);
+        for (let k = 0; k < 3; k++) { circle(x - 24 + k * 24, P.lipY - 530, 13, INK); circle(x - 24 + k * 24, P.lipY - 530, 10, '#fff7c2'); }
+        ctx.fillStyle = 'rgba(255,247,194,.08)'; ctx.beginPath(); ctx.moveTo(x - 30, P.lipY - 520); ctx.lineTo(P.cx - 200, P.y); ctx.lineTo(P.cx + 200, P.y); ctx.closePath(); ctx.fill();
+      }
+    } else if (layer === 'bed') {
+      // planks, the metal coping on the lips and the fences
+      ctx.strokeStyle = 'rgba(122,77,42,.5)'; ctx.lineWidth = 2;
+      for (let x = P.cx - P.half + 40; x < P.cx + P.half; x += 80) { ctx.beginPath(); ctx.moveTo(x, P.y + 4); ctx.lineTo(x, P.y + 60); ctx.stroke(); }
+      for (const sx of [-1, 1]) {
+        const x = P.cx + sx * P.lipX;
+        circle(x, P.lipY - 6, 10, INK); circle(x, P.lipY - 6, 6, '#c9c7d6');
+        const fx = x + sx * P.deck;
+        ctx.strokeStyle = INK; ctx.lineWidth = 8; ctx.beginPath(); ctx.moveTo(fx, P.lipY - 40); ctx.lineTo(fx, P.lipY - 700); ctx.stroke();
+        ctx.strokeStyle = '#ff4fd8'; ctx.lineWidth = 4; ctx.stroke();
+      }
+      zb_text('FLIP ZONE', P.cx, P.y + 90, 34, '#ffd23f');
+      // Blue's pipe is far below: draw Blue up here (moved back in the front layer)
+      zb_shiftTeam(1, -P.DY); G.zb_hp.shifted = true;
+    } else if (layer === 'front') {
+      if (G.zb_hp.shifted) { zb_shiftTeam(1, P.DY); G.zb_hp.shifted = false; }
+      // live flip counter over anyone in the air
+      for (const t of [0, 1]) {
+        const F = G.zb_hp.st[t], c = G.zb_hp.cars[t];
+        if (!F || !F.air || !c || c.dead) continue;
+        const n = Math.abs(F.rot) / (Math.PI * 2);
+        if (n > .3) zb_text(`${n.toFixed(1)}x`, carX(c), carY(c) - (t ? P.DY : 0) - 100, 22, tc(t));
+      }
+    }
+  },
+});
+
+// ---------- 13. Brake Late, Mate! ----------
+// Both cars charge at a cliff by themselves; press anything to slam the brakes. Closest stop without going over wins.
+// Red drives on a bridge above Blue's road, so the two never bump.
+const zb_BL = { edge: 2400, sea: 600, lanes: [430, 210], D: 1150, M: 40 };
+const zb_blLane = t => G.teams.length > 1 && t === 0 ? 1 : 0;
+const zb_blFront = c => Math.max(c.wA.x, c.wB.x) + c.V.wr;
+MINIS.push({
+  id: 'zb_brake', engine: 'race', rank: 13, name: 'Brake Late, Mate!', icon: 'xr_car', rules: 'score', goal: 3, time: 120, soloGoal: 4, soloTime: 120, noCatch: true,
+  howto: 'Your car charges at the cliff by itself. Press ←, jump or honk to slam the brakes. Stop closest to the edge without going over!',
+  blurb: 'Drive full speed at a cliff edge. Whoever stops closest without going over wins.',
+  deco: 'beach', sky: ['#7fd0ff', '#e6f7ff'], ground: ['#c99a5a', '#8a6232'], edge: '#ffe2a8',
+  track: [['flat', 2400], ['gap', 1600, 460], ['flat', 300]], startX: 400, startY: 430, crateEvery: 0,
+  setup() {
+    const B = zb_BL;
+    zb_road([[-260, B.lanes[1]], [B.edge, B.lanes[1]]], { r: 10 });
+    G.track.finish = 1e9;
+    G.zb_bl = { phase: 'set', t: 0, run: 0, st: [{}, {}], cars: [null, null], speed: 560, x0: 600 };
+    G.zb_cs = null;
+    this.newRun();
+  },
+  newRun() {
+    const B = zb_BL, S = G.zb_bl;
+    S.phase = 'set'; S.t = 0; S.run++;
+    S.speed = rand(500, 690); S.x0 = B.edge - rand(1350, 1850);
+    for (const t of G.teams) {
+      G.respawn[t] = null;
+      const c = zb_respawn(t, S.x0, 0);
+      zb_place(c, S.x0, B.lanes[zb_blLane(t)] - 10 - c.V.wr - 1);
+      c.done = true; S.cars[t] = c; S.st[t] = { s: 'drive', d: null };
+    }
+  },
+  tick(dt) {
+    const B = zb_BL, S = G.zb_bl;
+    S.t += dt;
+    for (const c of cars.slice()) {
+      if (c.dead || c.team > 1) continue;
+      const t = c.team, F = S.st[t], r = c.driver, v = carVel(c);
+      c.done = true; c.checkX = S.x0;
+      // a car that turned up mid-run (after a splash) waits for the next run
+      if (S.cars[t] !== c) { S.cars[t] = c; F.s = 'wait'; zb_place(c, S.x0 - 200, B.lanes[zb_blLane(t)] - 10 - c.V.wr - 1); }
+      const pressed = !isCpu(t) && (teamDir(t) < 0 || (c.honkT || 0) > (F.honk || 0) || c.hopCD > .4 && !(F.hop > .4));
+      F.honk = c.honkT || 0; F.hop = c.hopCD;
+      if (S.phase === 'set' || F.s === 'wait') { zb_shove(c, -v.x, 0); continue; }
+      if (!r || !r.seat) { if (F.s !== 'over') { F.s = 'over'; F.d = null; } continue; }
+      const front = zb_blFront(c), left = B.edge - front, lane = B.lanes[zb_blLane(t)];
+      if (F.s === 'drive') {
+        zb_shove(c, (S.speed - v.x) * Math.min(1, 6 * dt), 0);
+        let brake = pressed;
+        if (isCpu(t)) {
+          if (F.err == null) F.err = rand(-30, 120);
+          brake = left < v.x * v.x / (2 * B.D) + F.err;
+        }
+        if (brake) { F.s = 'brake'; sfx.slip(); pop(pick(['SCREEEECH!', 'BRAKES!', 'WHOA!']), carX(c), carY(c) - 80, tc(t), 22); }
+      } else if (F.s === 'brake') {
+        zb_shove(c, -Math.min(v.x, B.D * dt), 0);
+        if (Math.random() < .6) fx.puffs.push({ x: c.wA.x, y: c.wA.y + c.V.wr, vx: -rand(20, 80), vy: -rand(20, 60), r: rand(4, 8), t: 0, life: .5, color: '#d9d4c8' });
+        if (carVel(c).x < 4) { F.s = 'stop'; F.at = S.t; }
+      } else if (F.s === 'stop') {
+        // hanging over the edge? physics decides
+        if (front < B.edge + 4) zb_shove(c, -v.x, 0);
+      }
+      if (carY(c) > lane + 40 && F.s !== 'over') { F.s = 'over'; F.d = null; pop(pick(['BYE BYE!', 'NOOOO!', 'TOO LATE!']), carX(c), lane - 90, '#ffffff', 26); }
+      if (carY(c) > B.sea && r && r.seat) { ejectDriver(c, 'SPLASH!'); puffs(carX(c), B.sea, 18, '#ffffff'); sfx.splat(); }
+      if (F.s !== 'over') F.d = Math.max(0, left);
+    }
+    if (S.phase === 'set' && S.t > 1.8) { S.phase = 'go'; S.t = 0; sfx.vroom(); pop('GO!', carX(S.cars[0] || cars[0]) + 200, B.lanes[1] - 80, '#ffd23f', 40); }
+    else if (S.phase === 'go') {
+      const all = G.teams.every(t => ['stop', 'over', 'wait'].includes(S.st[t].s)), last = Math.max(...G.teams.map(t => S.st[t].at || 0));
+      if ((all && S.t - last > .9) || S.t > 12) this.result();
+    } else if (S.phase === 'result' && S.t > 2.6) this.newRun();
+    this.cam();
+  },
+  result() {
+    const B = zb_BL, S = G.zb_bl;
+    S.phase = 'result'; S.t = 0;
+    const m = d => (d / B.M).toFixed(1) + ' m';
+    for (const t of G.teams) { const F = S.st[t], c = S.cars[t]; if (F.s === 'stop' && c && !c.dead) pop(m(F.d), carX(c), carY(c) - 110, tc(t), 26); }
+    if (G.teams.length === 1) {
+      const F = S.st[0], c = S.cars[0];
+      if (F.s === 'stop' && F.d <= B.M * .5) { miniPoint(0, 2, carX(c), carY(c) - 160); pop('PERFECT!!', carX(c), carY(c) - 200, '#ffd23f', 34); }
+      else if (F.s === 'stop' && F.d <= B.M * 3) { miniPoint(0, 1, carX(c), carY(c) - 160); pop('NICE STOP!', carX(c), carY(c) - 200, '#5ee08a', 28); }
+      else if (F.s === 'stop') pop('TOO EARLY!', B.edge - 300, B.lanes[0] - 160, '#ffffff', 26);
+      return;
+    }
+    const ok = G.teams.filter(t => S.st[t].s === 'stop');
+    if (!ok.length) { pop('EVERYBODY SPLASHED!', B.edge - 200, B.lanes[1] - 140, '#ffffff', 28); return; }
+    const best = Math.min(...ok.map(t => S.st[t].d)), win = ok.filter(t => S.st[t].d <= best + 1);
+    for (const t of win) { const c = S.cars[t]; miniPoint(t, 1, carX(c), carY(c) - 160); }
+    if (win.length === 1) pop(`${nameOf(win[0])} BRAKED LATEST!`, B.edge - 300, B.lanes[1] - 150, tc(win[0]), 26);
+  },
+  cam() {
+    const B = zb_BL, pts = zb_carPts();
+    pts.push([B.edge + 160, B.lanes[0]], [B.edge + 160, B.lanes[G.teams.length > 1 ? 1 : 0] - 120]);
+    zb_cam(pts, { pad: 140, zmin: .45, zmax: 1, yk: .55 });
+  },
+  draw(layer) {
+    const B = zb_BL, S = G.zb_bl; if (!S) return;
+    const cam = G.cam, L = cam.x - 50, R = cam.x + W / cam.z + 50, bot = cam.y + H / cam.z + 50;
+    if (layer === 'back') {
+      if (G.phase !== 'live') this.cam();
+      // red's bridge
+      if (G.teams.length > 1) {
+        const y = B.lanes[1];
+        ctx.strokeStyle = '#6a7290'; ctx.lineWidth = 8;
+        for (let x = Math.max(-200, Math.floor(L / 260) * 260); x < Math.min(B.edge - 40, R); x += 260) { ctx.beginPath(); ctx.moveTo(x, y + 10); ctx.lineTo(x, B.lanes[0] - 12); ctx.stroke(); }
+        ctx.fillStyle = '#8a92b0'; ctx.strokeStyle = INK; ctx.lineWidth = 4; ctx.fillRect(Math.max(-260, L), y - 10, Math.min(B.edge, R) - Math.max(-260, L), 22); ctx.strokeRect(Math.max(-260, L), y - 10, Math.min(B.edge, R) - Math.max(-260, L), 22);
+        ctx.fillStyle = '#ffffff'; for (let x = Math.floor(L / 60) * 60; x < Math.min(B.edge - 20, R); x += 60) ctx.fillRect(x, y - 1, 26, 3);
+      }
+      // distance marks before the edge, on both roads
+      for (const li of G.teams.length > 1 ? [0, 1] : [0]) {
+        const y = B.lanes[li] - 10;
+        for (const k of [1, 2, 3, 5, 10]) {
+          const x = B.edge - k * B.M;
+          ctx.fillStyle = k <= 1 ? '#ff3b3b' : k <= 3 ? '#ffd23f' : '#ffffff';
+          ctx.fillRect(x - 2, y - 4, 4, 8);
+          ctx.font = Math.round(11 * FDK) + 'px ' + FD; ctx.textAlign = 'center'; ctx.fillStyle = INK; ctx.fillText(k + 'm', x, y + 18);
+        }
+        // the warning sign at the edge
+        ctx.fillStyle = INK; ctx.fillRect(B.edge - 8, y - 70, 5, 70);
+        ctx.fillStyle = '#ffd23f'; ctx.beginPath(); ctx.moveTo(B.edge - 6, y - 104); ctx.lineTo(B.edge + 16, y - 70); ctx.lineTo(B.edge - 28, y - 70); ctx.closePath(); ctx.fill(); ctx.strokeStyle = INK; ctx.lineWidth = 3; ctx.stroke();
+        zb_text('!', B.edge - 6, y - 80, 16, INK);
+      }
+    } else if (layer === 'front') {
+      // the sea
+      ctx.fillStyle = '#2f9fe0'; ctx.beginPath(); ctx.moveTo(B.edge - 20, bot + 400);
+      for (let x = B.edge - 20; x <= R + 400; x += 30) ctx.lineTo(x, B.sea + Math.sin(x / 50 + G.t * 2) * 6);
+      ctx.lineTo(R + 400, bot + 400); ctx.closePath(); ctx.fill(); ctx.strokeStyle = INK; ctx.lineWidth = 4; ctx.stroke();
+      ctx.fillStyle = 'rgba(255,255,255,.6)'; for (let x = B.edge + 60; x < R; x += 140) ctx.fillRect(x + Math.sin(G.t + x) * 10, B.sea + 30, 40, 4);
+      zb_screen(() => {
+        if (S.phase === 'set') zb_text(S.t < .9 ? 'READY…' : 'SET…', W / 2, 150, 40, '#ffffff');
+        zb_text(`Run ${S.run}`, 24, H - 24, 18, '#ffffff', 'left');
+      });
+    }
+  },
+});
+
+// ---------- 14. Big Fat Ramp ----------
+// One enormous ramp, then a long field of trampolines, hay bales and cows. Your score is where your car stops.
+const zb_BR = { lip: 2360, M: 40 };
+// the ramp as lots of little slopes, so it curves smoothly: a long drop, then a kicker up to the lip at x 2360
+function zb_brRamp() {
+  const out = [], f = x => x < 1700 ? 830 * (x / 1700 - Math.sin(x / 1700 * Math.PI * 2) / (Math.PI * 2)) : x < 1800 ? 830 : 830 - 130 * Math.pow((x - 1800) / 300, 2);
+  let px = 0;
+  for (let x = 50; x <= 2100; x += 50) { out.push(['slope', 50, f(x) - f(px)]); px = x; }
+  return out;
+}
+MINIS.push({
+  id: 'zb_ramp', engine: 'race', rank: 14, name: 'Big Fat Ramp', icon: 'xr_car', rules: 'score', time: 60, soloTime: 60, soloGoal: 60, noCatch: true,
+  howto: 'Zoom down the giant ramp and launch! Lean with ← → in the air. Bounce off cows, hay and trampolines; your best distance counts.',
+  blurb: 'One enormous ramp, one long field of stuff to land on.',
+  deco: 'farm', sky: ['#5fb6ff', '#d6f0ff'], ground: ['#6fcf5a', '#3f9a33'],
+  track: [['flat', 260], ...zb_brRamp(), ['gap', 200, 170],
+    ['flat', 300], ['tramp', 260], ['flat', 600], ['bumps', 360, 3, 16], ['flat', 500], ['tramp', 260], ['flat', 700], ['hill', 400, 50], ['flat', 600], ['tramp', 260], ['flat', 2600]],
+  startX: 150, startY: -380, crateEvery: 0,
+  setup() {
+    const B = zb_BR;
+    G.track.finish = 1e9;
+    G.zb_br = { st: [{}, {}], cars: [null, null], flags: [], best: [0, 0], cows: [] };
+    // bouncy hay bales and cows that work like springs
+    for (const x of [3500, 4300, 5300, 6250, 7400, 8100]) {
+      const gy = groundY(x); if (gy == null) continue;
+      const it = spawnItem('zb_haypad', x, gy - 22, 0, 0, -1); it.p.kin = true; it.life = 1e9;
+    }
+    for (const x of [3250, 4000, 4950, 5800, 6900, 7800]) {
+      const gy = groundY(x); if (gy == null) continue;
+      const it = spawnItem('zb_cowpad', x, gy - 34, 0, 0, -1); it.p.kin = true; it.life = 1e9;
+    }
+    G.zb_cs = null;
+  },
+  tick(dt) {
+    const B = zb_BR, S = G.zb_br;
+    for (const t of G.teams) {
+      const c = zb_car(t) || S.cars[t]; if (!c) continue;
+      if (S.cars[t] !== c) { S.cars[t] = c; S.st[t] = { s: 'ramp' }; c.done = false; }
+      const F = S.st[t], r = c.driver, v = carVel(c);
+      c.checkX = this.startX - t * 120;
+      if (F.s === 'ramp') {
+        if (carX(c) > B.lip && !c.dead) { F.s = 'fly'; F.t = 0; F.still = 0; c.done = true; pop(pick(['WHEEEE!', 'LAUNCH!', 'BYE!']), carX(c), carY(c) - 80, tc(t), 26); sfx.whee(); }
+      } else if (F.s === 'fly') {
+        F.t += dt; c.done = true;
+        // the engine would bring a new car right away; hold it until this one stops rolling
+        if (G.respawn[t] != null) G.respawn[t] = G.liveT + 5;
+        if (r && r.seat && !carGround(c)) { zb_gyro(c, dt, isCpu(t) ? 900 : 1100, 40); if (!isCpu(t)) zb_drive(c, teamDir(t) * .5, dt); }
+        F.still = Math.abs(v.x) < 30 ? F.still + dt : 0;
+        const gone = c.dead || carY(c) > G.killY - 60;
+        if (F.still > .7 || F.t > 9 || gone) {
+          const d = gone ? 0 : Math.max(0, Math.round((carX(c) - B.lip) / B.M));
+          const fx = gone ? B.lip + 100 : carX(c), fy = gone ? 430 : carY(c);
+          F.s = 'done'; F.t = 0; F.d = d;
+          S.flags.push({ x: fx, team: t, d });
+          pop(d ? `${d} m!` : 'SPLAT! 0 m', fx, fy - 110, tc(t), 30);
+          if (d > S.best[t]) { S.best[t] = d; if (d) pop('NEW BEST!', fx, fy - 150, '#ffd23f', 22); }
+          G.rscore[t] = S.best[t];
+        }
+      } else if (F.s === 'done') {
+        F.t += dt;
+        if (G.respawn[t] != null) G.respawn[t] = G.liveT + 5;
+        if (F.t > 1.6) { G.respawn[t] = null; const nc = zb_respawn(t, this.startX - t * 120); nc.done = false; S.cars[t] = nc; S.st[t] = { s: 'ramp' }; }
+      }
+    }
+    // cows and hay bales: land on one (or bump into it) and it flings you onwards
+    for (const it of items) {
+      if ((it.kind !== 'zb_cowpad' && it.kind !== 'zb_haypad') || it.dead) continue;
+      const cow = it.kind === 'zb_cowpad';
+      for (const c of cars) if (!c.dead && (c.zb_cowT || 0) < G.t && Math.abs(carX(c) - it.p.x) < (cow ? 55 : 50) && Math.abs(carY(c) - it.p.y) < (cow ? 50 : 40)) {
+        c.zb_cowT = G.t + .6; const v = carVel(c);
+        zb_shove(c, Math.max(0, (cow ? 260 : 160) - v.x * .2), -Math.max(0, v.y) - (cow ? 520 : 420));
+        pop(cow ? pick(['MOO-BOING!', 'MOOOO!', 'COW SPRING!']) : pick(['BOING!', 'HAY THERE!', 'FLUMPH!']), it.p.x, it.p.y - 60, cow ? '#ffffff' : '#ffd23f', 24);
+        cow ? sfx.moo() : sfx.boing(.8); it.zb_squash = .3;
+      }
+    }
+    this.cam();
+  },
+  cam() {
+    const S = G.zb_br; if (!S) return;
+    let pts = cars.filter(c => !c.dead && c.team < 2).map(c => [carX(c), carY(c)]);
+    if (pts.length > 1 && Math.abs(pts[0][0] - pts[1][0]) > 2600) pts = [pts.reduce((a, b) => b[0] > a[0] ? b : a)];
+    zb_cam(pts, { pad: 260, zmin: .4, zmax: .8, ahead: 120 });
+  },
+  draw(layer) {
+    const B = zb_BR, S = G.zb_br; if (!S) return;
+    const cam = G.cam, L = cam.x - 60, R = cam.x + W / cam.z + 60;
+    if (layer === 'back') {
+      if (G.phase !== 'live') this.cam();
+      // distance posts
+      for (let k = 10; k * B.M + B.lip < Math.min(R, 9300); k += 10) {
+        const x = B.lip + k * B.M; if (x < L) continue;
+        const gy = groundY(x); if (gy == null) continue;
+        ctx.fillStyle = INK; ctx.fillRect(x - 3, gy - 58, 6, 58);
+        ctx.fillStyle = '#ffffff'; roundRect(x - 22, gy - 76, 44, 22, 6); ctx.fill(); ctx.strokeStyle = INK; ctx.lineWidth = 3; ctx.stroke();
+        ctx.font = Math.round(13 * FDK) + 'px ' + FD; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = INK; ctx.fillText(k + 'm', x, gy - 65);
+      }
+      // the giant ramp's scaffolding
+      for (let x = 400; x < B.lip; x += 220) { const gy = groundY(x); if (gy == null || x < L || x > R) continue; ctx.strokeStyle = 'rgba(122,77,42,.6)'; ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(x, gy + 12); ctx.lineTo(x, 900); ctx.moveTo(x, gy + 12); ctx.lineTo(x + 110, 900); ctx.stroke(); }
+      zb_text('BIG FAT RAMP', 300, -480, 36, '#ffd23f');
+    } else if (layer === 'bed') {
+      for (const f of S.flags) {
+        const gy = groundY(f.x) ?? 520, best = f.d && f.d === S.best[f.team];
+        ctx.fillStyle = INK; ctx.fillRect(f.x - 2, gy - (best ? 90 : 60), 4, best ? 90 : 60);
+        ctx.fillStyle = tc(f.team); tri(f.x + 2, gy - (best ? 90 : 60), f.x + 34, gy - (best ? 80 : 52), f.x + 2, gy - (best ? 70 : 44));
+        if (best) zb_text(f.d + 'm', f.x + 20, gy - 108, 16, tc(f.team));
+      }
+    }
+  },
+});
+Object.assign(ITEMS, {
+  zb_cowpad: { label: 'Bouncy Cow', r: 30, m: 9, life: 1e9, sprite: 'cow',
+    update(it, dt) { it.flip = -1; if (it.zb_squash > 0) it.zb_squash -= dt; it.ang = it.zb_squash > 0 ? Math.sin(G.t * 40) * .15 : 0; return false; } },
+  zb_haypad: { label: 'Bouncy Hay', r: 23, m: 3, life: 1e9, sprite: 'zb_hay',
+    update(it, dt) { if (it.zb_squash > 0) it.zb_squash -= dt; it.ang = it.zb_squash > 0 ? Math.sin(G.t * 40) * .12 : 0; return false; } },
+});
+
+// ---------- shared bits for the collect-along-the-road levels (15-17) ----------
+// finishing gives a bonus, and the round ends once everybody is over the line
+function zb_finishBonus(c, first, second) {
+  const n = G.place.length === 1 ? first : second;
+  if (n) miniPoint(c.team, n, carX(c), carY(c) - 150);
+}
+function zb_allHome() {
+  if (G.phase !== 'live' || !G.teams.every(t => G.place.includes(t))) return false;
+  const solo = G.teams.length === 1, [a, b] = G.rscore;
+  if (solo) endRound(a >= (G.mini.soloGoal ?? G.mini.goal) ? 0 : null, { time: G.liveT });
+  else endRound(a > b ? 0 : b > a ? 1 : G.place[0], { time: G.liveT });
+  return true;
+}
+// a CPU hops when something worth grabbing floats above the road just ahead
+function zb_cpuHopFor(c, kinds, minUp = 70) {
+  if (!carGround(c) || c.hopCD > 0) return;
+  const x = carX(c), gy = carY(c);
+  if (G.track.gaps.some(([g1, g2]) => g1 - x > -40 && g1 - x < 260)) return;
+  for (const it of items) if (!it.dead && kinds.includes(it.kind) && it.p.x - x > 40 && it.p.x - x < 150 && gy - it.p.y > minUp && Math.random() < .25) { carHop(c); return; }
+}
+
+// ---------- 15. Long Dog ----------
+// Everyone drives a hot dog. Every hot dog you grab makes yours longer; long dogs roll right over gaps.
+// gaps land a little lower than they take off, and get wider as the dogs get longer
+const zb_LD_TRACK = [['flat', 500], ['hill', 400, 60], ['flat', 300], ['gap', 70, 25], ['flat', 300], ['bumps', 400, 4, 18], ['slope', 80, -15], ['gap', 90, 35], ['flat', 300],
+  ['hill', 260, 100], ['flat', 250], ['check'], ['dip', 400, 70], ['slope', 80, -15], ['gap', 110, 40], ['flat', 300], ['hill', 500, 80], ['slope', 80, -15], ['gap', 120, 40], ['flat', 250],
+  ['bumps', 300, 3, 22], ['flat', 200], ['check'], ['slope', 80, -15], ['gap', 140, 35], ['flat', 300], ['hill', 240, 100], ['flat', 300], ['slope', 80, -15], ['gap', 150, 30], ['flat', 300],
+  ['dip', 300, 60], ['flat', 200], ['check'], ['slope', 80, -15], ['gap', 170, 40], ['flat', 250], ['hill', 400, 70], ['slope', 80, -15], ['gap', 180, 30], ['flat', 400], ['finish'], ['flat', 300]];
+function zb_grow(c, base) {
+  if (!c.zb_ownV) { c.V = Object.assign({}, c.V); c.zb_ownV = true; }
+  const V = c.V, h = V.h; V.base = base;
+  const L = [base, base * .84, Math.hypot(base * .08, h), Math.hypot(base * .08, h), Math.hypot(base * .92, h), Math.hypot(base * .92, h)];
+  c.sticks.forEach((s, i) => { s[2] = L[i]; });
+}
+MINIS.push({
+  id: 'zb_longdog', engine: 'race', rank: 15, name: 'Long Dog', icon: 'zb_hotdog', rules: 'score', time: 60, soloTime: 60, soloGoal: 24,
+  howto: 'Grab the floating hot dogs! Each one makes your hot dog car longer. Longest dog at the finish wins (long dogs roll over gaps).',
+  blurb: 'Everyone drives a hot dog car, and every hot dog you grab makes it longer.',
+  deco: 'farm', sky: ['#7fd0ff', '#fff3d6'], ground: ['#7cc46a', '#4f9a3f'],
+  track: zb_LD_TRACK, startX: 100, startY: 430, crateEvery: 0, vehicle: 'hotdog',
+  setup() {
+    G.zb_ld = { len: [74, 74], cars: [null, null] };
+    // hot dogs float along the road, some up high (hop!) and some over the gaps
+    for (let x = 500; x < G.track.finish - 150; x += rand(170, 260)) {
+      const gy = groundY(x) ?? groundY(x - 120) ?? groundY(x + 120); if (gy == null) continue;
+      const gold = Math.random() < .08, it = spawnItem('zb_dog', x, gy - (Math.random() < .3 ? rand(130, 170) : rand(45, 75)), 0, 0, null);
+      it.p.kin = true; it.life = 1e9; it.zb_y = it.p.y; it.zb_gold = gold;
+    }
+  },
+  onFinish(c) { zb_finishBonus(c, 3, 1); pop(G.place.length === 1 ? 'FIRST TO THE GRILL! +3' : 'HOME! +1', carX(c), carY(c) - 190, tc(c.team), 22); },
+  cpu(r, c) { zb_cpuHopFor(c, ['zb_dog']); return null; },
+  tick(dt) {
+    const S = G.zb_ld;
+    for (const t of G.teams) {
+      const c = zb_car(t); if (!c) continue;
+      // new cars (after a crash) keep their length
+      if (S.cars[t] !== c) { S.cars[t] = c; zb_grow(c, S.len[t]); }
+      if (c.V.base < S.len[t]) zb_grow(c, Math.min(S.len[t], c.V.base + 60 * dt));
+    }
+    for (const R of S.restock || []) if (G.t > R.at) { R.done = true; const it = spawnItem('zb_dog', R.x, R.y, 0, 0, null); it.p.kin = true; it.life = 1e9; it.zb_y = R.y; it.zb_gold = R.gold; }
+    if (S.restock) S.restock = S.restock.filter(R => !R.done);
+    if (zb_allHome()) return;
+  },
+  draw(layer) {
+    if (layer !== 'front' || !G.zb_ld) return;
+    for (const t of G.teams) { const c = zb_car(t); if (c && c.driver) zb_text(`${Math.round(G.zb_ld.len[t] / 74 * 10) / 10}x`, carX(c), carY(c) - 120, 16, tc(t)); }
+  },
+});
+Object.assign(ITEMS, {
+  zb_dog: { label: 'Hot Dog', r: 16, m: .5, life: 1e9, sprite: 'zb_hotdog',
+    update(it, dt) {
+      it.p.y = it.zb_y + Math.sin(G.t * 3 + it.p.x * .01) * 6; it.p.py = it.p.y; it.ang = Math.sin(G.t * 2 + it.p.x) * .15;
+      const S = G.zb_ld; if (!S || G.phase !== 'live') return false;
+      for (const c of cars) {
+        if (c.dead || !c.driver || !c.driver.seat || c.team > 1) continue;
+        const reach = 40 + c.V.base * .45;
+        if (Math.abs(carX(c) - it.p.x) < reach && Math.abs(carY(c) - 40 - it.p.y) < 62) {
+          const n = it.zb_gold ? 3 : 1;
+          S.len[c.team] = Math.min(330, S.len[c.team] + 14 * n);
+          miniPoint(c.team, n, it.p.x, it.p.y - 30);
+          pop(it.zb_gold ? 'FOOT-LONG!' : pick(['LONGER!', 'NOM!', 'MORE DOG!', 'STRETCH!']), it.p.x, it.p.y - 60, it.zb_gold ? '#ffd23f' : tc(c.team), 18);
+          sfx.chomp(); removeItem(it, true);
+          // the hot dog stand restocks, so whoever is behind still gets some
+          S.restock = S.restock || []; S.restock.push({ x: it.p.x, y: it.zb_y, gold: it.zb_gold, at: G.t + .7 });
+          break;
+        }
+      }
+      return false;
+    } },
+});
+
+// ---------- 16. Piñata Parade ----------
+// Piñatas hang over the road after little kickers. Hop up and whack them for coins; ram a rival and they drop half.
+function zb_ppTrack() {
+  const t = [['flat', 500]];
+  for (let i = 0; i < 9; i++) {
+    t.push(['slope', 140, -55], ['step', 0, 55], ['flat', 420 + (i % 3) * 60]);
+    t.push(i % 2 ? ['bumps', 300, 3, 16] : ['hill', 340, 60 + i * 4], ['flat', 140]);
+    if (i % 3 === 2) t.push(['check']);
+  }
+  t.push(['flat', 200], ['finish'], ['flat', 300]);
+  return t;
+}
+MINIS.push({
+  id: 'zb_pinata', engine: 'race', rank: 16, name: 'Piñata Parade', icon: 'zb_pinata', rules: 'score', time: 60, soloTime: 60, soloGoal: 22,
+  howto: 'Hop (↑) off the little ramps to whack the piñatas, then scoop up the coins. Ram a rival to make them drop half of theirs!',
+  blurb: 'A piñata dangles over the track. Hit it with a jump and coins rain down.',
+  deco: 'candy', sky: ['#ffb3d9', '#fff0f7'], ground: ['#8fd36a', '#5aa64a'], edge: '#fff3a6',
+  track: zb_ppTrack(), startX: 100, startY: 430, crateEvery: 0,
+  setup() {
+    G.zb_pp = { pins: [] };
+    // a piñata just past every kicker (the steps in the track)
+    for (const ln of G.track.lines) for (let i = 1; i < ln.length; i++) {
+      const [x1, y1] = ln[i - 1], [x2, y2] = ln[i];
+      if (Math.abs(x2 - x1) < 1 && y2 - y1 > 40) { const x = x2 + 120, gy = groundY(x); if (gy != null) G.zb_pp.pins.push({ x, y: gy - 150, top: gy - 330, hits: 0, wob: 0, cd: 0, gone: 0 }); }
+    }
+  },
+  onFinish(c) { zb_finishBonus(c, 5, 2); pop(G.place.length === 1 ? 'FIRST HOME! +5' : 'HOME! +2', carX(c), carY(c) - 190, tc(c.team), 22); },
+  cpu(r, c) {
+    const x = carX(c);
+    if (carGround(c) && G.zb_pp) for (const P of G.zb_pp.pins) if (!P.gone && P.x - x > 30 && P.x - x < 120 && Math.random() < .3) carHop(c);
+    return null;
+  },
+  tick(dt) {
+    const S = G.zb_pp;
+    for (const P of S.pins) {
+      P.wob *= Math.pow(.05, dt); P.cd -= dt;
+      if (P.gone) { if ((P.gone -= dt) <= 0) { P.gone = 0; P.hits = 0; pop('NEW PIÑATA!', P.x, P.y - 60, '#ff4fd8', 18); } continue; }
+      for (const c of cars) {
+        if (c.dead || !c.driver || !c.driver.seat || c.team > 1 || P.cd > 0) continue;
+        const h = c.driver.p.head, near = Math.hypot(h.x - P.x, h.y - P.y) < 46 || Math.hypot(carX(c) - P.x, carY(c) - 30 - P.y) < 50;
+        if (!near) continue;
+        P.cd = .35; P.hits++; P.wob = 1;
+        const burst = P.hits >= 3, n = burst ? 8 : 3;
+        for (let i = 0; i < n; i++) zb_coin(P.x, P.y + 10, rand(-260, 260) + carVel(c).x * .4, -rand(200, 420), 1);
+        if (burst) { zb_coin(P.x, P.y, rand(-100, 100), -400, 3); zb_coin(P.x, P.y, rand(-100, 100), -400, 3); P.gone = 6; zb_confetti(P.x, P.y); pop('KA-POW!', P.x, P.y - 50, '#ffd23f', 32); }
+        else pop(pick(['WHACK!', 'BONK!', 'THWACK!']), P.x, P.y - 50, '#ffffff', 24);
+        sfx.thwack();
+      }
+    }
+    // rams knock half the coins out of whoever got hit
+    const cs = cars.filter(c => !c.dead && c.driver && c.driver.seat && c.team < 2);
+    if (cs.length === 2) {
+      const [A, B] = cs, dx = carX(B) - carX(A);
+      if (Math.abs(dx) < (A.V.base + B.V.base) / 2 + 24 && Math.abs(carY(A) - carY(B)) < 50) {
+        const rel = carVel(A).x - carVel(B).x, hit = (dx > 0 ? rel > 0 : rel < 0) ? B : A;
+        if (Math.abs(rel) > 160 && (hit.zb_hitT || 0) < G.t) {
+          hit.zb_hitT = G.t + 1.6;
+          const lose = Math.floor(G.rscore[hit.team] / 2);
+          if (lose > 0) {
+            G.rscore[hit.team] -= lose;
+            for (let i = 0; i < Math.min(lose, 12); i++) zb_coin(carX(hit), carY(hit) - 50, rand(-240, 240), -rand(300, 500), i < 12 && lose > 12 ? Math.ceil(lose / 12) : 1);
+            pop(`-${lose} COINS!`, carX(hit), carY(hit) - 110, tc(hit.team), 24); sfx.clang();
+          }
+        }
+      }
+    }
+    zb_allHome();
+  },
+  draw(layer) {
+    const S = G.zb_pp; if (!S || layer !== 'bed') return;
+    const cam = G.cam, L = cam.x - 100, R = cam.x + W / cam.z + 100;
+    for (const P of S.pins) {
+      if (P.x < L || P.x > R) continue;
+      const sw = Math.sin(G.t * 2 + P.x) * .06 + Math.sin(G.t * 18) * .25 * P.wob;
+      const bx = P.x + Math.sin(sw) * (P.y - P.top), by = P.top + Math.cos(sw) * (P.y - P.top);
+      ctx.strokeStyle = INK; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(P.x, P.top); ctx.lineTo(bx, by - 26); ctx.stroke();
+      ctx.fillStyle = '#7a4d2a'; ctx.fillRect(P.x - 40, P.top - 8, 80, 10);
+      if (P.gone) continue;
+      ctx.save(); ctx.translate(bx, by); ctx.rotate(sw); drawSprite(ctx, 'zb_pinata', 0, 64 - P.hits * 6); ctx.restore();
+    }
+  },
+});
+function zb_confetti(x, y) { for (let i = 0; i < 24; i++) fx.confetti.push({ x, y, vx: rand(-200, 200), vy: rand(-300, 0), a: rand(0, 6), va: rand(-6, 6), c: pick(['#ff4fd8', '#ffd23f', '#5ee08a', '#6ad1ff']) }); shake(5); }
+function zb_coin(x, y, vx, vy, val) {
+  const it = spawnItem('zb_coin', x, y, vx, vy, null);
+  it.life = 1e9; it.zb_life = 12; it.zb_val = val; it.bounce = .5;
+  if (val > 1) it.zb_big = true;
+  const all = items.filter(i => i.kind === 'zb_coin');
+  if (all.length > 70) removeItem(all[0], false);
+  return it;
+}
+function zb_grab(it, t, x, y) {
+  if (it.dead || G.phase !== 'live') return;
+  G.rscore[t] += it.zb_val; pop(`+${it.zb_val}`, x, y - 30, it.zb_val > 1 ? '#ff4fd8' : '#ffd23f', it.zb_val > 1 ? 22 : 16);
+  sfx.ding(); removeItem(it, false);
+}
+Object.assign(ITEMS, {
+  zb_coin: { label: 'Coin', r: 10, m: .3, life: 1e9, sprite: 'coin',
+    onTouch(it, o) { if (o.type === 'rag' && o.seat && o.team < 2 && it.age > .25) zb_grab(it, o.team, it.p.x, it.p.y); },
+    update(it, dt) {
+      if ((it.zb_life -= dt) <= 0) { removeItem(it, true); return false; }
+      if (it.age > .25) for (const c of cars) if (!c.dead && c.driver && c.driver.seat && c.team < 2 && Math.hypot(carX(c) - it.p.x, carY(c) - 25 - it.p.y) < 30 + c.V.base * .4) { zb_grab(it, c.team, it.p.x, it.p.y); break; }
+      return false;
+    } },
+});
+
+// ---------- 17. Squish the Cake Parade ----------
+// Monster trucks only. Flatten the giant cakes along the road; land a jump right onto a row for double points.
+// The splatter is slippery. Every player can squish every cake once (a cake you've done is dented and ringed in the other colour).
+Object.assign(VEHICLES, {
+  zb_monster: { label: 'Monster Truck', base: 74, h: 30, wr: 23, acc: 1500, top: 600, mass: 1.5, seat: 30, wheel: '#ffd23f' },
+});
+function zb_ckTrack() {
+  const t = [['flat', 500]];
+  for (let i = 0; i < 9; i++) {
+    t.push(['slope', 170, -70], ['step', 0, 70], ['flat', 520]);
+    t.push(i % 3 === 1 ? ['hill', 360, 70] : i % 3 === 2 ? ['bumps', 360, 3, 18] : ['dip', 360, 50], ['flat', 300]);
+    if (i % 3 === 2) t.push(['check']);
+  }
+  t.push(['flat', 200], ['finish'], ['flat', 300]);
+  return t;
+}
+function zb_drawMonster(c) {
+  const a = carAng(c), mx = (c.bA.x + c.bB.x) / 2, my = (c.bA.y + c.bB.y) / 2, L = c.V.base, col = tc(c.team);
+  ctx.save(); ctx.translate(mx, my); ctx.rotate(a);
+  ctx.lineWidth = 3; ctx.strokeStyle = INK; ctx.lineJoin = 'round';
+  // suspension struts down to the big wheels
+  ctx.strokeStyle = '#3a3a4a'; ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(-L / 2, 8); ctx.lineTo(-L / 2, c.V.h); ctx.moveTo(L / 2, 8); ctx.lineTo(L / 2, c.V.h); ctx.stroke();
+  ctx.strokeStyle = INK; ctx.lineWidth = 3;
+  ctx.fillStyle = col; roundRect(-L / 2 - 16, -10, L + 32, 22, 8); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = tcl(c.team); roundRect(-6, -30, 36, 22, 6); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#ffb02e'; for (let k = 0; k < 3; k++) tri(-L / 2 - 8 + k * 16, 10, -L / 2 + k * 16, -4, -L / 2 + 8 + k * 16, 10);
+  ctx.fillStyle = '#fff36b'; circle(L / 2 + 12, -2, 4, '#fff36b');
+  ctx.restore();
+}
+MINIS.push({
+  id: 'zb_cakes', engine: 'race', rank: 17, name: 'Squish the Cake Parade', icon: 'cake', rules: 'score', time: 60, soloTime: 60, soloGoal: 50,
+  howto: 'Drive your monster truck over the giant cakes to squish them! Jump off a ramp right onto a row for double points. Everyone gets their own go at every cake.',
+  blurb: 'Monster trucks only, and the road is lined with giant cakes to flatten.',
+  deco: 'candy', sky: ['#ffc6e6', '#fff6fb'], ground: ['#c99a5a', '#8a6232'], edge: '#ffe2f0',
+  track: zb_ckTrack(), startX: 100, startY: 430, crateEvery: 0, vehicle: 'zb_monster',
+  setup() {
+    const S = G.zb_ck = { regrow: [], splats: [] };
+    const bake = x => { const gy = groundY(x); if (gy == null) return; const it = spawnItem('zb_cake', x, gy - 22, 0, 0, null); it.p.kin = true; it.life = 1e9; it.zb_x = x; };
+    S.bake = bake;
+    // a row of cakes just past every ramp, and a few more along the way
+    for (const ln of G.track.lines) for (let i = 1; i < ln.length; i++) {
+      const [x1, y1] = ln[i - 1], [x2, y2] = ln[i];
+      if (Math.abs(x2 - x1) < 1 && y2 - y1 > 40) for (let k = 0; k < 4; k++) bake(x2 + 130 + k * 58);
+    }
+    for (let x = 900; x < G.track.finish - 200; x += rand(500, 800)) if (!items.some(it => it.kind === 'zb_cake' && Math.abs(it.p.x - x) < 120)) { bake(x); bake(x + 58); }
+  },
+  onFinish(c) { zb_finishBonus(c, 3, 1); pop(G.place.length === 1 ? 'FIRST! +3' : 'HOME! +1', carX(c), carY(c) - 190, tc(c.team), 22); },
+  cpu(r, c) { return null; },
+  tick(dt) {
+    const S = G.zb_ck;
+    for (const c of cars) {
+      if (c.dead || c.team > 1) continue;
+      const g = carGround(c);
+      if (!g) c.zb_air = (c.zb_air || 0) + dt; else { if ((c.zb_air || 0) > .3) c.zb_land = G.t; c.zb_air = 0; }
+      if (!c.driver || !c.driver.seat) continue;
+      for (const it of items) {
+        if (it.kind !== 'zb_cake' || it.dead || Math.abs(it.p.x - carX(c)) > 90 || (it.zb_sq && it.zb_sq[c.team])) continue;
+        if (![c.wA, c.wB].some(w => Math.abs(w.x - it.p.x) < 20 + w.r * .7 && w.y + w.r > it.p.y - 14)) continue;
+        const dbl = G.t - (c.zb_land || -9) < .55 || c.zb_air > .35;
+        miniPoint(c.team, dbl ? 2 : 1, it.p.x, it.p.y - 40);
+        if (dbl || Math.random() < .3) pop(dbl ? 'AIR SQUISH! x2' : pick(['SQUISH!', 'SPLAT!', 'SPLORT!', 'FLOMP!']), it.p.x, it.p.y - 80, dbl ? '#ffd23f' : '#ff4fd8', dbl ? 24 : 20);
+        sfx.splat(); puffs(it.p.x, it.p.y, 10, pick(['#ff8fc7', '#ffffff', '#fff3a6']));
+        G.raceZones.push({ k: 'ice', x1: it.p.x - 40, x2: it.p.x + 40, t: 14 });
+        S.splats.push({ x: it.p.x, y: it.p.y + 22, t: 14, c: pick(['#ff8fc7', '#fff3a6', '#ffffff', '#c98a40']) });
+        // every player gets their own go at every cake: the first squish only dents it
+        it.zb_sq = it.zb_sq || [false, false]; it.zb_sq[c.team] = true;
+        if (G.teams.every(t => it.zb_sq[t])) { S.regrow.push({ x: it.zb_x, at: G.t + 5 }); removeItem(it, false); }
+        else { const bot = it.p.y + it.p.r; it.p.r = 14; it.p.y = it.p.py = bot - 14; it.team = 1 - c.team; }
+        // a little bump up from the squish
+        for (const p of c.list) addVel(p, 0, -60);
+      }
+    }
+    for (const R of S.regrow) if (G.t > R.at) { R.done = true; S.bake(R.x); }
+    S.regrow = S.regrow.filter(R => !R.done);
+    for (const sp of S.splats) sp.t -= dt;
+    S.splats = S.splats.filter(sp => sp.t > 0);
+    zb_allHome();
+  },
+  draw(layer) {
+    const S = G.zb_ck; if (!S) return;
+    if (layer === 'back') {
+      for (const sp of S.splats) { ctx.globalAlpha = Math.min(1, sp.t / 2); ctx.fillStyle = sp.c; ctx.beginPath(); ctx.ellipse(sp.x, sp.y - 4, 44, 8, 0, 0, 7); ctx.fill(); for (let k = 0; k < 4; k++) circle(sp.x - 36 + k * 24, sp.y - 6 - (k % 2) * 4, 6, sp.c); ctx.globalAlpha = 1; }
+    } else if (layer === 'bed') {
+      for (const c of cars) if (!c.dead && c.vk === 'zb_monster') zb_drawMonster(c);
+    }
+  },
+});
+Object.assign(ITEMS, {
+  zb_cake: { label: 'Giant Cake', r: 22, m: 2, life: 1e9, sprite: 'cake', update(it) { it.ang = 0; return false; } },
+});
+
+// ---------- 18. Crumbly Cookie Road ----------
+// The road is one giant cookie floating on milk. Chunks crumble away a few seconds after the leader passes.
+const zb_CR = { w: 110, milk: 590 };
+function zb_crY(x) { return x < 700 ? 430 : 430 + 45 * Math.sin((x - 700) / 650) + 22 * Math.sin((x - 700) / 210); }
+function zb_crChunk(S, x1, x2) {
+  const pts = [[x1, zb_crY(x1)], [(x1 + x2) / 2, zb_crY((x1 + x2) / 2)], [x2, zb_crY(x2)]];
+  S.chunks.push({ x1, x2, pts, segs: zb_road(pts, { ground: true, step: 60 }), st: 'ok', t: 0 });
+}
+function zb_crExtend(S, to) {
+  while (S.end < to) {
+    const x = S.end;
+    // now and then a bite is missing from the cookie: hop it!
+    if (x > 1500 && x - (S.bite || 0) > 700 && Math.random() < .08 + Math.min(.08, G.heat * .04)) { S.bite = x; S.end += rand(45, 70) + Math.min(40, G.heat * 25); continue; }
+    zb_crChunk(S, x, x + zb_CR.w); S.end += zb_CR.w;
+  }
+  G.track.lines = S.chunks.filter(k => k.st !== 'gone').map(k => k.pts);
+}
+MINIS.push({
+  id: 'zb_cookie', engine: 'race', rank: 18, name: 'Crumbly Cookie Road', icon: 'zb_cookie', rules: 'survive', noPunch: true, noCatch: true, soloTime: 40, maxTime: 100, heatTime: 45,
+  howto: 'The cookie road crumbles behind the leader! Keep up, hop (↑) over the bitten bits, and don\'t fall in the milk.',
+  blurb: 'The road is one giant cookie, and it crumbles away behind the leader.',
+  deco: 'candy', sky: ['#ffd9b0', '#fff6e6'], ground: ['#d9a35a', '#a8743a'], edge: '#f2c98a',
+  track: [['flat', 700]], startX: 120, startY: 430, crateEvery: 0,
+  setup() {
+    statics.grid = new Map(); statics.segs = [];
+    addSeg({ x1: -250, y1: -200, x2: -250, y2: 430, r: 12, ground: false });
+    const S = G.zb_cr = { chunks: [], end: -260, crumbs: [] };
+    zb_crExtend(S, 2600);
+    G.track.finish = 1e9; G.track.minY = 360; G.track.maxY = 500; G.killY = zb_CR.milk + 200;
+    G.zb_cs = null;
+  },
+  cpu(r, c) {
+    // hop over bites in the cookie
+    const x = carX(c) + c.V.base / 2 + 40;
+    if (carGround(c) && G.zb_cr && !G.zb_cr.chunks.some(k => k.st !== 'gone' && x > k.x1 && x < k.x2) && Math.random() < .5) carHop(c);
+    return null;
+  },
+  tick(dt) {
+    const S = G.zb_cr, CR = zb_CR;
+    const seated = cars.filter(c => !c.dead && c.driver && c.driver.seat && c.team < 2);
+    const lead = Math.max(...seated.map(c => carX(c)), -1e9);
+    if (lead > -1e9) zb_crExtend(S, lead + 2600);
+    const delay = Math.max(.9, 2.8 - G.heat * 1.1);
+    let changed = false;
+    for (const k of S.chunks) {
+      if (k.st === 'ok' && k.x2 < lead - 60) { k.st = 'shake'; k.t = delay; }
+      else if (k.st === 'shake' && (k.t -= dt) <= 0) {
+        k.st = 'gone'; changed = true;
+        for (const s of k.segs) s.off = true;
+        for (let i = 0; i < 3; i++) S.crumbs.push({ x: rand(k.x1, k.x2), y: k.pts[1][1], vx: rand(-40, 40), vy: rand(-120, 0), r: rand(8, 16), a: rand(0, 6) });
+        if (Math.random() < .3) pop(pick(['CRUNCH!', 'CRUMBLE!', 'NOM!']), (k.x1 + k.x2) / 2, k.pts[1][1] - 40, '#a8743a', 18);
+      }
+    }
+    if (changed) { S.chunks = S.chunks.filter(k => k.st !== 'gone' || k.x2 > lead - 3000); G.track.lines = S.chunks.filter(k => k.st !== 'gone').map(k => k.pts); }
+    for (const b of S.crumbs) { b.vy += 900 * dt; b.x += b.vx * dt; b.y += b.vy * dt; b.a += dt * 3; }
+    S.crumbs = S.crumbs.filter(b => b.y < CR.milk + 40);
+    // springy cookie-proof suspension: cars don't flip over on every crumb
+    for (const c of cars) if (!c.dead && c.driver && c.driver.seat && !carGround(c)) zb_gyro(c, dt, 1600, 40);
+    // the milk
+    for (const c of cars) if (!c.dead && carY(c) > CR.milk - 10 && c.driver && c.driver.seat) { ejectDriver(c, pick(['SPLOOSH!', 'DUNKED!', 'MILK BATH!'])); puffs(carX(c), CR.milk, 16, '#ffffff'); }
+    for (const r of rags) if (!r.lost && !r.seat && r.p.pelvis.y > CR.milk) loseBody(r, 'water');
+    this.cam();
+  },
+  cam() {
+    const pts = cars.filter(c => !c.dead && c.driver && c.driver.seat && c.team < 2).map(c => [carX(c), carY(c)]);
+    zb_cam(pts.length ? pts : zb_carPts(), { pad: 260, zmin: .5, zmax: .9, ahead: 160, yk: .5 });
+  },
+  draw(layer) {
+    const S = G.zb_cr, CR = zb_CR; if (!S) return;
+    const cam = G.cam, L = cam.x - 60, R = cam.x + W / cam.z + 60, bot = cam.y + H / cam.z + 60;
+    if (layer === 'back') {
+      if (G.phase !== 'live') this.cam();
+    } else if (layer === 'bed') {
+      // chocolate chips, and cracks on the chunks about to go
+      for (const k of S.chunks) {
+        if (k.st === 'gone' || k.x2 < L || k.x1 > R) continue;
+        const y = k.pts[1][1];
+        ctx.fillStyle = '#5a3420'; for (let i = 0; i < 2; i++) { const x = k.x1 + 25 + i * 55 + (k.x1 * 7 % 13); circle(x, y + 30 + (i * 23 % 40), 7, '#5a3420'); }
+        if (k.st === 'shake') {
+          const f = 1 - k.t / Math.max(.9, 2.8 - G.heat * 1.1);
+          ctx.strokeStyle = f > .6 && Math.sin(G.t * 30) > 0 ? '#ff3b3b' : INK; ctx.lineWidth = 3;
+          ctx.beginPath(); ctx.moveTo(k.x1 + 10, y - 8); ctx.lineTo(k.x1 + 40, y + 20); ctx.lineTo(k.x1 + 30, y + 50); ctx.moveTo(k.x2 - 20, y - 8); ctx.lineTo(k.x2 - 45, y + 30); ctx.stroke();
+        }
+      }
+    } else if (layer === 'front') {
+      for (const b of S.crumbs) { ctx.save(); ctx.translate(b.x, b.y); ctx.rotate(b.a); ctx.fillStyle = INK; ctx.fillRect(-b.r / 2 - 2, -b.r / 2 - 2, b.r + 4, b.r + 4); ctx.fillStyle = '#d9a35a'; ctx.fillRect(-b.r / 2, -b.r / 2, b.r, b.r); ctx.restore(); }
+      // milk
+      ctx.fillStyle = '#fffaf0'; ctx.beginPath(); ctx.moveTo(L, bot + 300);
+      for (let x = L; x <= R; x += 30) ctx.lineTo(x, CR.milk + Math.sin(x / 60 + G.t * 2) * 5);
+      ctx.lineTo(R, bot + 300); ctx.closePath(); ctx.fill(); ctx.strokeStyle = INK; ctx.lineWidth = 4; ctx.stroke();
+      ctx.fillStyle = 'rgba(200,220,255,.5)'; for (let x = Math.floor(L / 160) * 160; x < R; x += 160) ctx.fillRect(x + Math.sin(G.t + x) * 12, CR.milk + 26, 50, 4);
+    }
+  },
+});
+
+// ---------- 19. Moon Buggy Bounce ----------
+// A race on the moon: low gravity turns every bump into a long floaty jump.
+MINIS.push({
+  id: 'zb_moon', engine: 'race', rank: 19, name: 'Moon Buggy Bounce', icon: 'moon', rules: 'race', goal: 1, time: 90, soloTime: 70, grav: .42,
+  howto: 'Race across the moon! Every bump sends you floating, so lean with ← → to land on your wheels. First to the flag wins.',
+  blurb: 'Race on the moon, where every bump launches you into slow motion.',
+  deco: 'space', sky: ['#05060f', '#1b2140'], ground: ['#b9b9c6', '#7c7c8c'], edge: '#e6e6f0',
+  // every crater-pit has a little lip before it and lands lower than it takes off
+  track: [['flat', 400], ['dip', 300, 60], ['bumps', 400, 3, 30], ['flat', 150], ['slope', 100, -30], ['gap', 200, 80], ['flat', 200], ['check'], ['hill', 500, 120], ['flat', 150],
+    ['dip', 400, 90], ['boost', 200], ['slope', 200, -80], ['gap', 260, 150], ['flat', 300], ['check'], ['bumps', 500, 4, 40],
+    ['dip', 350, 70], ['dip', 350, 70], ['slope', 100, -30], ['gap', 220, 60], ['flat', 250], ['check'], ['hill', 600, 160], ['flat', 200],
+    ['bumps', 300, 3, 30], ['boost', 200], ['slope', 150, -60], ['gap', 300, 130], ['flat', 300], ['check'], ['dip', 400, 80], ['flat', 200], ['finish'], ['flat', 500]],
+  startX: 100, startY: 430, crateEvery: 800, crateItems: ['spring', 'rocket', 'banana', 'spring'],
+  vehicles: ['bed', 'cart', 'rocket', 'chair', 'bathtub', 'shoe', 'duck', 'mower'],
+  setup() { G.zb_mn = { craters: [] }; for (let x = 300; x < G.track.finish; x += rand(160, 380)) G.zb_mn.craters.push([x, rand(10, 26)]); },
+  onFinish(c) { if (!carGround(c)) pop(pick(['*WAVES*', 'FLOATING PAST!', 'WHEEE… FLAG!']), carX(c), carY(c) - 150, '#ffffff', 22); },
+  tick(dt) {
+    for (const c of cars) {
+      if (c.dead || !c.driver || !c.driver.seat) continue;
+      c.zb_air = carGround(c) ? 0 : (c.zb_air || 0) + dt;
+      // moon buggies have gyros: long floaty flights don't end upside down quite so often
+      if (c.zb_air > .15) zb_gyro(c, dt, isCpu(c.team) ? 1300 : 650, 45);
+      if (c.zb_air > 1.4 && !c.zb_said) { c.zb_said = true; pop(pick(['floaty…', 'so floaty…', 'weeee…', 'one small hop…']), carX(c), carY(c) - 90, '#e6e6f0', 18); }
+      if (!c.zb_air) c.zb_said = false;
+    }
+  },
+  draw(layer) {
+    const S = G.zb_mn; if (!S || layer !== 'back') return;
+    const cam = G.cam, L = cam.x - 60, R = cam.x + W / cam.z + 60;
+    // craters dotted over the ground
+    for (const [x, r] of S.craters) {
+      if (x < L || x > R) continue;
+      const gy = groundY(x); if (gy == null) continue;
+      ctx.fillStyle = 'rgba(90,90,110,.45)'; ctx.beginPath(); ctx.ellipse(x, gy + 22 + r, r * 1.6, r * .5, 0, 0, 7); ctx.fill();
+    }
+    // the Earth, far away
+    zb_screen(() => {
+      const x = 160, y = 110; circle(x, y, 34, INK); circle(x, y, 31, '#3a8fff');
+      ctx.fillStyle = '#4cbb47'; ctx.beginPath(); ctx.ellipse(x - 8, y - 6, 12, 9, .5, 0, 7); ctx.fill(); ctx.beginPath(); ctx.ellipse(x + 12, y + 10, 9, 6, -.4, 0, 7); ctx.fill();
+    });
+  },
+});
+
+// ---------- 20. Wobbly Pizza Delivery ----------
+// A loose stack of pizza boxes sits on your driver's head. Every bump and every burst of speed makes it wobble;
+// tip it too far and the top box flies off. Points for every box that reaches the house.
+const zb_PZ = { n: 6 };
+MINIS.push({
+  id: 'zb_pizza', engine: 'race', rank: 20, name: 'Wobbly Pizza Delivery', icon: 'zb_pizza', rules: 'score', time: 75, soloTime: 75, soloGoal: 4,
+  howto: 'Deliver the pizza stack to the house! Bumps and speed make it wobble, so ease off the gas when it leans. 1 point per box delivered.',
+  blurb: 'Deliver a tall stack of pizza boxes across a bumpy town without dropping any.',
+  deco: 'city', sky: ['#8fd3ff', '#e6f6ff'], ground: ['#8a8a9a', '#5a5a6a'], edge: '#ffffff',
+  track: [['flat', 400], ['bumps', 300, 2, 14], ['flat', 300], ['slope', 60, -30], ['flat', 300], ['step', 0, 30], ['flat', 200], ['dip', 200, 30], ['flat', 300], ['check'],
+    ['hill', 400, 60], ['flat', 200], ['bumps', 400, 4, 12], ['flat', 300], ['slope', 200, -60], ['flat', 200], ['step', 0, 60], ['flat', 300], ['check'],
+    ['bumps', 300, 2, 18], ['flat', 250], ['dip', 300, 40], ['flat', 200], ['gap', 70, 10], ['flat', 300], ['hill', 500, 80], ['flat', 200], ['check'],
+    ['bumps', 500, 5, 14], ['flat', 300], ['slope', 60, -30], ['flat', 250], ['step', 0, 30], ['flat', 300], ['finish'], ['flat', 500]],
+  startX: 100, startY: 430, crateEvery: 0, vehicles: ['cart', 'chair', 'mower', 'shoe', 'toilet', 'couch', 'bathtub', 'duck'],
+  setup() { G.zb_pz = { st: [{}, {}], cars: [null, null], left: [zb_PZ.n, zb_PZ.n] }; },
+  onFinish(c) {
+    const S = G.zb_pz, t = c.team, n = S.left[t];
+    if (n > 0) { miniPoint(t, n, carX(c), carY(c) - 150); pop(`${n} PIZZA${n > 1 ? 'S' : ''} DELIVERED!`, carX(c), carY(c) - 190, tc(t), 24); }
+    else pop('…NO PIZZA?', carX(c), carY(c) - 170, '#ffffff', 22);
+    if (G.place.length === 1 && G.teams.length > 1 && n > 0) { miniPoint(t, 1, carX(c), carY(c) - 230); pop('FIRST! +1 TIP', carX(c), carY(c) - 260, '#ffd23f', 20); }
+    S.st[t].home = true;
+  },
+  cpu(r, c) {
+    // the computer eases off when the stack leans
+    const F = G.zb_pz && G.zb_pz.st[c.team]; if (!F) return null;
+    const risk = Math.abs(F.lean || 0) + Math.abs(F.lv || 0) * .25;
+    return { dir: risk > .7 ? 0 : risk > .45 ? .35 : .8 };
+  },
+  tick(dt) {
+    const S = G.zb_pz;
+    for (const t of G.teams) {
+      const c = zb_car(t); if (!c) continue;
+      if (S.cars[t] !== c) {
+        // a crash scatters a couple of boxes
+        if (S.cars[t] && S.left[t] > 0) { const lose = Math.min(2, S.left[t]); S.left[t] -= lose; pop(`-${lose} PIZZA`, carX(c), carY(c) - 110, tc(t), 20); }
+        S.cars[t] = c; S.st[t] = { lean: 0, lv: 0, vx: 0, vy: 0 };
+      }
+      const F = S.st[t], v = carVel(c);
+      if (!c.driver || !c.driver.seat || F.home || !S.left[t]) { F.vx = v.x; F.vy = v.y; continue; }
+      // smoothed speed-ups and the jolts from bumps
+      const vxs = (F.vxs ?? v.x) + (v.x - (F.vxs ?? v.x)) * Math.min(1, 8 * dt), ax = (vxs - (F.vxs ?? vxs)) / dt; F.vxs = vxs;
+      const jolt = Math.max(0, Math.abs((v.y - F.vy) / dt) - 1600); F.vx = v.x; F.vy = v.y;
+      const a = carAng(c), spd = clamp(Math.abs(v.x) / c.V.top, 0, 1.3);
+      // an upside-down pendulum the driver balances: speed-ups push it back, bumps kick it, tilting the car tips it
+      const acc = 7 * (F.lean + a * .9) - 15 * F.lean - 3 * F.lv - clamp(ax, -3000, 3000) * .0012;
+      if (jolt) F.lv += (Math.sign(F.lean) || (Math.random() < .5 ? -1 : 1)) * Math.min(jolt, 6000) * .00017 * (.3 + spd);
+      F.lv += (acc + rand(-1, 1) * 4 * spd) * dt; F.lean += F.lv * dt;
+      if (Math.abs(F.lean) > 1) {
+        const d = Math.sign(F.lean), h = c.driver.p.head;
+        S.left[t]--; F.lean *= .3; F.lv *= .2;
+        const it = spawnItem('zb_box', h.x + d * 20, h.y - 20 - S.left[t] * 9, v.x + d * 160, -260, null); it.life = 1e9; it.zb_life = 3;
+        pop(pick(['OOPS!', 'MY PIZZA!', 'NOOO!', 'WHOOPS!']), h.x, h.y - 70, '#ffffff', 22); sfx.whoosh();
+        if (G.teams.length === 1 && S.left[0] < this.soloGoal && G.phase === 'live') { endRound(null, { time: G.liveT }); return; }
+      }
+    }
+    zb_allHome();
+  },
+  draw(layer) {
+    const S = G.zb_pz; if (!S) return;
+    if (layer === 'front') {
+      for (const t of G.teams) {
+        const c = S.cars[t]; if (!c || c.dead || !c.driver || !c.driver.seat || S.st[t].home) continue;
+        const n = S.left[t], F = S.st[t], h = c.driver.p.head, a = carAng(c), ux = Math.sin(a), uy = -Math.cos(a);
+        for (let i = 0; i < n; i++) {
+          const k = i + 1, off = (F.lean || 0) * k * k * 1.3, x = h.x + ux * (16 + i * 9) + Math.cos(a) * off, y = h.y + uy * (16 + i * 9) + Math.sin(a) * off;
+          ctx.save(); ctx.translate(x, y); ctx.rotate(a + (F.lean || 0) * .12 * k);
+          ctx.fillStyle = INK; ctx.fillRect(-17, -6, 34, 11); ctx.fillStyle = i % 2 ? '#f2e2c4' : '#ffffff'; ctx.fillRect(-15, -4, 30, 7);
+          ctx.fillStyle = '#e53935'; ctx.fillRect(-4, -3, 8, 5);
+          ctx.restore();
+        }
+        if (Math.abs(F.lean || 0) > .6) zb_text('!', h.x + Math.sign(F.lean) * 30, h.y - 30 - n * 9, 20, '#ff3b3b');
+      }
+    } else if (layer === 'back') {
+      // the customer's house at the finish
+      const x = G.track.finish + 140, gy = groundY(x); if (gy == null) return;
+      ctx.save(); ctx.translate(x, gy - 70); drawSprite(ctx, 'house', 0, 150); ctx.restore();
+      zb_text('PIZZA HERE!', x, gy - 170, 18, '#ffd23f');
+    }
+  },
+});
+Object.assign(ITEMS, {
+  zb_box: { label: 'Pizza Box', r: 11, m: .4, life: 1e9, sprite: 'zb_pizza',
+    update(it, dt) { it.ang += dt * 8; if ((it.zb_life -= dt) <= 0) removeItem(it, true); return false; } },
+});
 // <<EXTRA LEVELS>>
 MINIS.forEach((m, i) => { m.rank = m.rank || i + 1; });
 
@@ -16860,7 +18119,8 @@ function buildMenu() {
     shuf.innerHTML = `${SHUF_SVG}<span class="ln">Shuffle</span><span class="tagr">${g === 'battle' ? 'Random arena' : 'Random every round'}</span>`;
     shuf.addEventListener('click', () => { ac(); sfx.click(); if (g === 'battle') settings.level = 'random'; else settings.mini = 'random'; saveSettings(); buildMenu(); previewLevel(); });
     box.appendChild(shuf);
-    list.forEach((L, i) => {
+    // shelves are in rank order (engine levels are merged in batches, not in order)
+    list.map((L, i) => [L, i]).sort((a, b) => g === 'party' ? (a[0].rank || 0) - (b[0].rank || 0) : 0).forEach(([L, i]) => {
       if (g === 'party' && (pool && !pool.includes(L) || shelf.length > 20 && !inTier(L))) return;
       const b = document.createElement('button');
       b.className = 'lvl'; b.id = 'lvl-' + i;
