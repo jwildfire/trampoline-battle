@@ -298,6 +298,7 @@ kbd { font: 900 12px var(--ui); color: var(--ink); background: var(--card-2); bo
           <button data-v="survival" aria-pressed="false"><img class="px" alt="" data-ic="heart">Survival</button>
           <button data-v="pileup" aria-pressed="false"><img class="px" alt="" data-ic="pile">Pile-Up</button>
           <button data-v="endless" aria-pressed="false"><img class="px" alt="" data-ic="dice">Endless</button>
+          <button data-v="chaos" aria-pressed="false"><img class="px" alt="" data-ic="zap">Pure Chaos</button>
         </div>
         <div class="row">
           <div class="field"><span class="lab">Who's playing</span>
@@ -2526,10 +2527,6 @@ const MINIS = [
     } },
 ];
 
-// ================= more levels (ranks 21-100) =================
-// They are in the menu like the rest, but rarer in Endless: see endlessPick().
-// <<EXTRA LEVELS>>
-MINIS.forEach((m, i) => { m.rank = m.rank || i + 1; });
 
 // Survival: one long run that adds a new hazard every 10 seconds
 const SURVIVAL_DEF = { id: 'survival', name: 'Survival', icon: 'heart', rules: 'survive', noPunch: true, heatTime: 80,
@@ -2568,6 +2565,7 @@ function nextRound() {
   randomLook();
   if (G.game === 'party') def = isRandom() || settings.mini === 'random' || !MINIS[settings.mini] ? endlessPick() : MINIS[settings.mini];
   else if (G.game === 'survival') def = SURVIVAL_DEF;
+  else if (G.game === 'chaos') def = chaosPick();
   else if (G.game === 'endless') {
     def = endlessPick();
   } else {
@@ -2576,13 +2574,15 @@ function nextRound() {
   }
   startRound(def);
 }
+const levelsFor = eng => MINIS.filter(m => (m.engine || 'bounce') === (eng || 'bounce'));
 // Endless deals rounds in blocks of 10: one level from ranks 51-100, two from 21-50 and seven from the top 20
 function endlessPick() {
   if (!G.sched || !G.sched.length) G.sched = shuffle(['low', 'mid', 'mid', 'top', 'top', 'top', 'top', 'top', 'top', 'top']);
   const tier = G.sched.pop();
   const inTier = m => tier === 'top' ? m.rank <= 20 : tier === 'mid' ? m.rank > 20 && m.rank <= 50 : m.rank > 50;
-  let pool = MINIS.filter(m => inTier(m) && m !== G.mini);
-  if (!pool.length) pool = MINIS.filter(m => m.rank <= 20 && m !== G.mini);
+  const all = levelsFor(G.engine);
+  let pool = all.filter(m => inTier(m) && m !== G.mini);
+  if (!pool.length) pool = all.filter(m => m.rank <= 20 && m !== G.mini);
   if (tier === 'top') {
     // the top 20 come out of a shuffled bag so they don't repeat
     G.endlessBag = (G.endlessBag || []).filter(m => pool.includes(m));
@@ -2590,6 +2590,18 @@ function endlessPick() {
     return G.endlessBag.pop();
   }
   return pick(pool);
+}
+// how chaotic each level idea is (1-10, from the design page), keyed by squashed name
+const IDEA_CHAOS = {'itsrainingeverything':10,'moshpit':10,'sweeper':10,'volleybonkers':9,'hotpotato':9,'weaponfrenzy':10,'lavarising':9,'musicaltrampolines':8,'meteorshower':10,'kingofthecloud':9,'sharkbait':9,'wreckingballs':10,'coinfountain':8,'sumoshrink':9,'simonbounce':8,'whackamole':8,'gravityroulette':9,'skytower':7,'cannonalley':9,'balloonpop':7,'runawaytrain':7,'paintsplat':7,'dodgeballdoom':7,'popcornpanic':8,'pirateshiptilt':8,'tornadoalley':8,'hoopdreams':7,'dinostampede':8,'bouncycastlesiege':7,'giantbootstomp':8,'piataparty':6,'snowballfort':7,'laserlimbo':8,'bowlingstrike':7,'conveyorchaos':8,'megatrampoline':7,'teenytinytrampoline':7,'capturetheflag':7,'pianokeys':7,'bubblehop':7,'junglevines':7,'spacestationspin':8,'magnetceiling':8,'icefloes':8,'lightsout':8,'invisibletrampoline':6,'skysoccer':6,'mirrorflip':7,'eggcatch':6,'pillowfightsleepover':6,'grabbyclaw':6,'seesawshowdown':7,'obstaclecourse':7,'robovacuum':7,'carwash':7,'jellywobble':7,'ghostchase':6,'keepyuppy':6,'trampolinegolf':7,'windmill':7,'lilypadleap':6,'crownsnatch':6,'bumpercars':6,'fruitsmash':6,'portalpanic':7,'avalanche':7,'tugofwar':6,'windtunnel':7,'pogosticks':7,'dunktank':6,'hauntedmansion':7,'treasuredig':7,'beehive':7,'sleepinggiant':6,'homerunderby':6,'pongpaddles':6,'dominotopple':6,'discospotlight':6,'downthewell':6,'pancakeflip':5,'ninjadojo':6,'slingshottargets':6,'toybox':6,'quickdraw':5,'castlemoat':6,'thunderstorm':6,'sushiconveyor':6,'webbuilder':6,'sandcastlesmash':5,'airhockey':6,'copycat':5,'ghostrace':5,'haystackmountain':6,'echocave':6,'hideandseek':5,'snailrace':4,'fishinghole':5,'tightropecircus':5,'zengarden':4,'robotrumble':5};
+const chaosOf = d => d.chaos || IDEA_CHAOS[d.name.toLowerCase().replace(/[^a-z0-9]/g, '')] || 5;
+// Pure Chaos: only the wildest levels, weighted toward the wildest of all
+function chaosPick() {
+  const pool = levelsFor(G.engine).filter(m => chaosOf(m) >= 8 && m !== G.mini);
+  const list = pool.length ? pool : levelsFor(G.engine);
+  let tot = 0; for (const m of list) tot += chaosOf(m) ** 3;
+  let r = Math.random() * tot;
+  for (const m of list) { r -= chaosOf(m) ** 3; if (r <= 0) return m; }
+  return list[0];
 }
 function teamsFor(def) { return settings.mode === 'solo' && !def.vs ? [0] : [0, 1]; }
 function startRound(def) {
@@ -2606,10 +2618,18 @@ function startRound(def) {
   for (const [k, o] of def.hazards || []) addHazard(k, Object.assign({}, o));
   if (def.npcs) addHazard('crowd', { n: def.npcs, weapons: def.npcWeapons });
   if (G.game === 'pileup') for (const k of G.cards) playCard(k, false);
+  if (G.game === 'chaos') {
+    // everything at full speed from the first second, plus a pile of extra chaos
+    G.heatBoost = 1.6;
+    const deck = shuffle(PILE_DECK.filter(k => !['lava', 'shrink', 'dance'].includes(k) || Math.random() < .3));
+    G.chaosCards = deck.slice(0, 4 + ((Math.random() * 3) | 0));
+    for (const k of G.chaosCards) playCard(k, false);
+    G.eventMega = Math.random() < .5;
+  } else G.heatBoost = 0;
   G.phase = 'intro'; G.phaseT = 0;
   relabelDone();
   const label = G.game === 'endless' ? `Round ${G.round}` : G.game === 'pileup' ? (G.cards.length ? `+ ${CARDS[G.cards[G.cards.length - 1]][0]}` : 'Round 1') : null;
-  G.toast = { text: G.game === 'pileup' ? label : def.name, sub: G.game === 'pileup' ? def.howto : def.howto, color: '#ffc928', t: 0, dur: 2.8 };
+  G.toast = { text: G.game === 'pileup' ? label : def.name, sub: G.game === 'chaos' ? `TURNED UP TO 11: ${G.chaosCards.map(k => CARDS[k][0].toLowerCase()).join(', ')}` : def.howto, color: G.game === 'chaos' ? '#ff4fd8' : '#ffc928', t: 0, dur: 3.2 };
   sfx.turn();
   renderHud();
 }
@@ -2681,7 +2701,7 @@ function miniFrame(dt) {
   if (G.phase === 'roundEnd') { if (G.phaseT >= (unlimited() ? 5 : 2.8)) afterRound(); return; }
   if (G.phase !== 'live') return;
   G.liveT += dt;
-  G.heat = G.liveT / (def.heatTime || 45);
+  G.heat = G.liveT / (def.heatTime || 45) + (G.heatBoost || 0);
   for (const h of G.hz) if (HZ[h.k].tick) HZ[h.k].tick(h, dt);
   if (def.tick) def.tick(dt);
   for (const t of G.teams) if (G.respawn[t] != null && G.liveT >= G.respawn[t]) { G.respawn[t] = null; spawnPlayer(t); }
@@ -3856,6 +3876,12 @@ const SPRITES = {
     '...yyyyy....',
   ]],
 };
+// ================= more levels (ranks 21-100) =================
+// Pasted here, after the sprite table, so levels can add their own sprites and items.
+// They are in the menu like the rest, but rarer in Endless: see endlessPick().
+// <<EXTRA LEVELS>>
+MINIS.forEach((m, i) => { m.rank = m.rank || i + 1; });
+
 const SPR = {};
 function buildSprites() {
   for (const name in SPRITES) {
@@ -5115,6 +5141,7 @@ const GAME_INFO = {
   party: ['Party Levels', '20 mini-games on trampolines: survive, brawl, race, collect, play ball.'],
   survival: ['Survival', 'No fighting. Just stay on. Every 10 seconds something new joins in: cows, cannons, sweepers, lava…'],
   pileup: ['Pile-Up', 'Start with nothing. Every round adds one more chaos card, and they all stay. The last rounds get very silly.'],
+  chaos: ['Pure Chaos', 'Everything turned up to 11 from the first second: only the wildest levels, every hazard at full speed, and a pile of extra chaos on top.'],
   endless: ['Endless', 'Thrown into a random party level, then another, then another. The rare levels from the bottom of the list turn up about once every 10 rounds. Solo: 3 lives, how far can you get?'],
 };
 // 0 means "you tell me": keep playing until someone presses Done
@@ -5155,7 +5182,7 @@ function buildMenu() {
       : `${L.name}: ${L.blurb}${L.howto ? ' ' + L.howto : ''}`;
   } else {
     $('#lvlLab').textContent = 'How it works';
-    const ic = { survival: 'heart', pileup: 'pile', endless: 'dice' }[g];
+    const ic = { survival: 'heart', pileup: 'pile', endless: 'dice', chaos: 'zap' }[g];
     let extra = '';
     if (g === 'survival' && best.survival) extra = ` Best solo time: ${fmtT(best.survival)}.`;
     if (g === 'endless' && best.endless) extra = ` Best solo run: ${best.endless} levels.`;
