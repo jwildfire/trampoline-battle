@@ -169,6 +169,7 @@ body[data-skin="crayon"] .lvl .ln, body[data-skin="crayon"] .seg.games button { 
 .keycard b { font-family: var(--display); font-weight: 400; font-size: 13px; }
 .keycard.r b { color: var(--red); }
 .keycard.b b { color: var(--blue); }
+.keys:has(#keyCard2[hidden]) .keycard { grid-column: 1 / -1; }
 kbd { font: 900 12px var(--ui); color: var(--ink); background: var(--card-2); border: 2px solid var(--ink); border-bottom-width: 3px; border-radius: 6px; padding: 0 5px; }
 .go-row { display: flex; flex-wrap: wrap; gap: 12px 14px; align-items: center; margin-bottom: 14px; }
 .go-row .note { flex: 1 1 200px; }
@@ -349,7 +350,7 @@ kbd { font: 900 12px var(--ui); color: var(--ink); background: var(--card-2); bo
           <div class="levels" id="levels"></div>
           <p id="lvlBlurb"></p>
           <div class="keys">
-            <div class="keycard r"><b id="keyName1">Red</b><br><kbd>A</kbd> <kbd>D</kbd> move · <kbd>W</kbd> jump · <kbd>S</kbd> slam<br><kbd>F</kbd> punch · <kbd>E</kbd> use item<br>On the crane: <kbd>W</kbd> swap fighter, <kbd>S</kbd> drop</div>
+            <div class="keycard r"><b id="keyName1">Red</b><br><span id="keyBody1"><kbd>A</kbd> <kbd>D</kbd> move · <kbd>W</kbd> jump · <kbd>S</kbd> slam<br><kbd>F</kbd> punch · <kbd>E</kbd> use item<br>On the crane: <kbd>W</kbd> swap fighter, <kbd>S</kbd> drop</span></div>
             <div class="keycard b" id="keyCard2"><b id="keyName2">Blue</b><br><kbd>←</kbd> <kbd>→</kbd> move · <kbd>↑</kbd> jump · <kbd>↓</kbd> slam<br><kbd>Enter</kbd> punch · <kbd>Shift</kbd> use item<br>On the crane: <kbd>↑</kbd> swap fighter, <kbd>↓</kbd> drop</div>
           </div>
           <p class="note">Fighters: Normal, Big Bruno, Baby Johnnys, Chunky Chuck and Cheeky Monkey. Grab the falling <b>?</b> crates for more fighters, animals and weird weapons.<br><i id="tip"></i></p>
@@ -18235,7 +18236,7 @@ function renderHud() {
     box.innerHTML = html;
   }
   $('#pad1').hidden = settings.mode !== '2p';
-  $('#keyCard2').hidden = false;
+  $('#keyCard2').hidden = settings.mode !== '2p';
   $('#doneBtn').hidden = !(playing() && unlimited());
   $('#lvlCtl').hidden = !(playing() && isMini());
 }
@@ -18458,12 +18459,18 @@ function renderLooks() {
   for (const b of $('#itemSeg').children) b.setAttribute('aria-pressed', String(b.dataset.v === (settings.items || 'random')));
 }
 function buildMenuNames() {
-  $('#keyName1').textContent = settings.mode !== '2p' ? `${nameOf(0)} (either set of keys)` : nameOf(0);
-  $('#keyName2').textContent = settings.mode === 'solo' ? 'Solo: just you (a computer joins when a level needs one)' : settings.mode === 'cpu' ? `${nameOf(1)} is the computer` : nameOf(1);
+  // one player: a single card listing both sets of keys (the computer plays Blue)
+  const one = settings.mode !== '2p';
+  $('#keyName1').textContent = one ? `${nameOf(0)}: arrows or WASD` : nameOf(0);
+  $('#keyBody1').innerHTML = one
+    ? '<kbd>←</kbd> <kbd>→</kbd> or <kbd>A</kbd> <kbd>D</kbd> move · <kbd>↑</kbd> or <kbd>W</kbd> jump · <kbd>↓</kbd> or <kbd>S</kbd> slam<br><kbd>Space</kbd>, <kbd>F</kbd> or <kbd>Enter</kbd> punch · <kbd>E</kbd> or <kbd>Shift</kbd> use item<br>On the crane: <kbd>↑</kbd>/<kbd>W</kbd> swap fighter, <kbd>↓</kbd>/<kbd>S</kbd> drop'
+    : '<kbd>A</kbd> <kbd>D</kbd> move · <kbd>W</kbd> jump · <kbd>S</kbd> slam<br><kbd>F</kbd> punch · <kbd>E</kbd> use item<br>On the crane: <kbd>W</kbd> swap fighter, <kbd>S</kbd> drop';
+  $('#keyName2').textContent = nameOf(1);
+  $('#keyCard2').hidden = one;
 }
 
 // ================= input =================
-// Red: WASD + F punch + E item. Blue: arrows + Enter punch + Shift item.
+// Red: WASD + F punch + E item. Blue: arrows + Enter punch + Shift item. With one player, both sets drive Red.
 const KEYMAP = {
   KeyA: [0, 'left'], KeyD: [0, 'right'], KeyW: [0, 'up'], KeyS: [0, 'down'], KeyF: [0, 'punch'], Space: [0, 'punch'], KeyG: [0, 'punch'], KeyE: [0, 'item'], KeyQ: [0, 'item'],
   ArrowLeft: [1, 'left'], ArrowRight: [1, 'right'], ArrowUp: [1, 'up'], ArrowDown: [1, 'down'],
